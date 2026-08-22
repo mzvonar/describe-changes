@@ -1,0 +1,17 @@
+{
+  "name": "describe-changes",
+  "owner": { "name": "Martin Zvonár" },
+  "description": "Human-first description of an implemented change: map + ranked review spots + folded noise, in chat and as a mobile-first HTML report.",
+  "plugins": [
+    {
+      "name": "describe-changes",
+      "source": "./",
+      "displayName": "Describe Changes (human-first change review)",
+      "description": "Present an implemented change for honest human review: intent, phases, visual map, critical/medium/low review spots, folded noise, Q&A, and a feedback loop that sharpens the skill.",
+      "version": "1.0.0",
+      "author": { "name": "Martin Zvonár" },
+      "license": "MIT",
+      "keywords": ["code-review", "diff", "human-review", "agentic"]
+    }
+  ]
+}
