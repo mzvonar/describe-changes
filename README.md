@@ -55,21 +55,63 @@ back to a text list without it.
 
 ## Install
 
-**Vendored copy in a consumer repo (recommended — same model as `run-story-skill`):**
+Two modes. Pick by whether you are **improving** the skill or **consuming** it.
+
+### Dev mode — one checkout, live in every repo
+
+The setup for iterating on the skill while using it on real repos. The skill lives in exactly one
+place, edits are live everywhere on the next invocation, and "merge upstream" is just a commit here.
+Agent-runnable from scratch:
+
+```bash
+git clone git@github.com:mzvonar/describe-changes.git ~/Development/describe-changes
+for P in ~/.claude ~/.claude-personal; do
+  [ -d "$P/skills" ] && ln -sfn ~/Development/describe-changes/skills/describe-changes "$P/skills/describe-changes"
+done
+bash ~/Development/describe-changes/tests/run.sh    # verify before trusting it on a real diff
+```
+
+Then, once per consumer repo, add `.describe-changes/` to its `.gitignore` (report + feedback output
+is written into every repo you run the skill on).
+
+Rules that keep this working:
+
+- **User level only.** In dev mode never symlink *or* vendor into a consumer's `.claude/skills/`.
+  That path is where the committed vendored copy belongs, and project level wins over user level — a
+  vendored copy silently shadows your checkout. (That shadowing is *correct* once a consumer pins a
+  copy for its team; dev mode just steps aside.)
+- **Nothing about the skill gets committed to the consumer.** No per-repo symlink to gitignore, no
+  VM-only path in a shared repo.
+- It works because `scripts/collect-diff.sh` resolves the target repo from the **cwd**
+  (`git rev-parse --show-toplevel`), not from the script's own location — so the skill can live
+  outside the repo it analyses. The lessons store is machine-global
+  (`~/.describe-changes/lessons.jsonl`), with every event tagged `repo`, so several consumers feed
+  one log and `feedback.py digest --repo <name>` still separates them.
+
+Loop: edit `skills/describe-changes/…` → `bash tests/run.sh` → run `/describe-changes` in a consumer
+repo → `feedback.py digest` → commit + push here. No sync step, no second copy to diverge.
+
+Caveat: `VERSION` is a static string, so lessons collected across an iteration session all carry the
+same `skill_version` and the digest cannot attribute one to a specific edit. Bump `VERSION` when a
+change is worth telling apart.
+
+### Consumer install — vendored, pinned, committed
+
+For teammates, CI, and machines that are not iterating on the skill:
 
 ```bash
 cd ~/Development/describe-changes
 ./sync-skill.sh /path/to/consumer            # pinned to main (needs a commit here)
+./sync-skill.sh /path/to/consumer --ref <ref>
 ./sync-skill.sh /path/to/consumer --worktree # copy the current working tree, uncommitted edits included
 ```
 
 Writes `<consumer>/.claude/skills/describe-changes/` + `<consumer>/.claude/skills/.describe-changes-version`
-(`sha=…`). Commit both in the consumer. Add `.describe-changes/` to the consumer's `.gitignore`
-(reports + feedback output).
+(`sha=…`). Commit both in the consumer. Add `.describe-changes/` to the consumer's `.gitignore`.
 
-**Edit-while-using loop:** if you fixed the vendored copy inside a consumer while using it,
-`./sync-skill.sh --from /path/to/consumer` copies it back here; review, commit, then forward-sync
-every consumer again.
+If you edited a vendored copy in place while using it, `./sync-skill.sh --from /path/to/consumer`
+copies it back here; review, commit, then forward-sync every consumer again. Dev mode never needs
+this — there is only one copy.
 
 **Plugin:** `claude --plugin-dir ~/Development/describe-changes`, or
 `/plugin marketplace add <path-or-repo>` → `/plugin install describe-changes@describe-changes`.
@@ -98,7 +140,8 @@ See `skills/describe-changes/reference/learning-loop.md`. Short version:
 python3 skills/describe-changes/scripts/feedback.py digest     # what humans disagreed with, what they asked
 ```
 
-→ edit `reference/analysis-guide.md` → bump `VERSION` → commit → re-sync consumers. Configure
+→ edit `reference/analysis-guide.md` → bump `VERSION` → `bash tests/run.sh` → commit + push (dev mode
+is live immediately; vendored consumers need a re-sync). Configure
 `~/.describe-changes/config.json` with an HTTP backend to pool lessons across a team.
 
 ## Tests
