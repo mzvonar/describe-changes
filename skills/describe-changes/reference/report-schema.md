@@ -31,6 +31,8 @@ Keys marked ● are required.
   // node.change: added | modified | removed | moved | renamed | split | unchanged
   // edge.kind: calls | dataflow | imports | renders | extends | moved_to | split_into | reads | writes | emits
 
+  "views": [ /* optional, 0–3 — see visualizations.md: screen | flow | adoption */ ],
+
   "findings": [                                                       // ● important first; ids C1.. M1.. L1..
     {
       "id": "C1", "severity": "critical",

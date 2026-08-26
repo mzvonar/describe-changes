@@ -92,6 +92,11 @@ the exact shape in `reference/report-schema.md`. The non-negotiables:
   hidden global state, error paths swallowed). That is the part no linter does.
 - **Phases** = dependency order (foundations → domain → wiring → tests), not file or commit order.
   2–6 phases; each narrative is 1–3 sentences a stranger can follow.
+- **Views** (`reference/visualizations.md`): pick 0–3 from the toolset — `screen` (nested boxes:
+  screen → slots → what fills them) for UI chrome, `flow` (created → deleted → re-pointed → restyled)
+  when the commits tell a story, `adoption` (root → used in → replaces) for every extracted shared
+  thing. Every block with a `file` is clickable to the changed code. Prefer these over the graph for
+  React/UI work; leave `graph.nodes` empty to hide the map.
 - **Graph** = only change-relevant symbols (functions, components, types, modules, stores), ≤ ~25
   nodes, edges of kind `calls | dataflow | imports | renders | moved_to | split_into | extends | reads | writes`.
   Use `diff-model.json`'s `symbol_moves` and `moved_from` for `moved`/`split`/`renamed` nodes.

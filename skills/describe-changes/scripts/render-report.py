@@ -104,6 +104,46 @@ def finding_card(f, hunks):
     <div class="fb"><textarea placeholder="Note for the skill (what was wrong / missing / useful)…"></textarea></div>
   </div></div>'''
 
+CH_LABEL = {"added": "new", "modified": "changed", "removed": "deleted", "moved": "moved", "renamed": "renamed", "split": "split", "unchanged": ""}
+
+def fchip(node):
+    """Clickable file chip → opens that file's changed code in the sheet."""
+    f = node.get("file")
+    if not f: return ""
+    return f'<button class="fchip" data-open="{E(f)}" title="{E(f)}">⟨/⟩ {E(os.path.basename(f))}</button>'
+
+def pill(change):
+    return f'<span class="chg chg-{E(change)}">{E(CH_LABEL.get(change, change))}</span>' if change and change != "unchanged" else ""
+
+def view_screen(v):
+    def box(n, depth=0):
+        slot = f'<span class="slot">{E(n["slot"])} ▸</span>' if n.get("slot") else ""
+        kids = "".join(box(c, depth + 1) for c in n.get("children", []))
+        note = f'<div class="scr-note">{E(n["note"])}</div>' if n.get("note") else ""
+        cls = "scr scr-" + E(n.get("change", "unchanged")) + (" scr-slot" if n.get("slot") else "")
+        return f'<div class="{cls}"><div class="scr-h">{slot}<span class="scr-l">{E(n["label"])}</span>{pill(n.get("change"))}{fchip(n)}</div>{note}{kids}</div>'
+    return f'<div class="screen">{box(v["screen"])}</div>'
+
+def view_flow(v):
+    def step(st, i=None):
+        kids = "".join(step(c) for c in st.get("then", []))
+        note = f'<div class="st-note">{E(st["note"])}</div>' if st.get("note") else ""
+        files = "".join(fchip({"file": f}) for f in st.get("files", []))
+        return (f'<div class="step step-{E(st.get("change", "unchanged"))}"><div class="st-h">{("<span class=st-n>" + str(i) + "</span>") if i else ""}<span class="st-l">{E(st["label"])}</span>{pill(st.get("change"))}{fchip(st)}{files}</div>{note}'
+                + (f'<div class="st-then">{kids}</div>' if kids else "") + '</div>')
+    return '<div class="flow">' + "".join(step(st, i) for i, st in enumerate(v["steps"], 1)) + "</div>"
+
+def view_adoption(v):
+    root = v["root"]
+    roots = root if isinstance(root, list) else [root]
+    rh = "".join(f'<div class="ad-root ad-{E(r.get("change","added"))}"><div class="scr-h"><span class="scr-l">{E(r["label"])}</span>{pill(r.get("change"))}{fchip(r)}</div>' + (f'<div class="scr-note">{E(r["note"])}</div>' if r.get("note") else "") + '</div>' for r in roots)
+    uses = "".join(f'<div class="ad-use ad-{E(u.get("change","modified"))}"><div class="scr-h"><span class="scr-l">{E(u["label"])}</span>{pill(u.get("change"))}{fchip(u)}</div>' + (f'<div class="scr-note">{E(u["note"])}</div>' if u.get("note") else "") + '</div>' for u in v.get("uses", []))
+    repl = "".join(f'<div class="ad-use ad-removed"><div class="scr-h"><span class="scr-l">{E(u["label"])}</span>{pill("removed")}{fchip(u)}</div>' + (f'<div class="scr-note">{E(u["note"])}</div>' if u.get("note") else "") + '</div>' for u in v.get("replaces", []))
+    return (f'<div class="adoption"><div class="ad-roots">{rh}</div><div class="ad-arrow">used in ↓</div><div class="ad-uses">{uses}</div>'
+            + (f'<div class="ad-arrow">replaces ↓</div><div class="ad-uses">{repl}</div>' if repl else "") + '</div>')
+
+VIEWS = {"screen": view_screen, "flow": view_flow, "adoption": view_adoption}
+
 def fold_card(g):
     items = []
     for it in g["items"]:
@@ -111,7 +151,7 @@ def fold_card(g):
         if it.get("followers"):
             sub = "<ul>" + "".join(f'<li>{E(x["file"])} — {E(x["detail"])}</li>' for x in it["followers"]) + "</ul>"
         if it.get("files"):
-            sub = "<ul>" + "".join(f'<li>{E(x)}</li>' for x in it["files"]) + "</ul>"
+            sub = '<details class="more"><summary>show files</summary><ul>' + "".join(f'<li>{E(x)}</li>' for x in it["files"]) + "</ul></details>"
             n = len(it["files"]); lab = f'unused imports dropped in {n} file{"s" if n != 1 else ""}' if it["module"] == "(imports removed)" else f'{E(it["module"])} <span style="color:var(--fg3)">← now imported in {n} file{"s" if n != 1 else ""}</span>'
             items.append(f'<li>{lab}{sub}</li>'); continue
         if it.get("targets"):
@@ -172,8 +212,17 @@ def main():
                  f'<div class="card-b"><div class="narr">{E(p["narrative"])}</div><div class="files">{files}</div></div></div>')
     b.append("</section>")
 
-    mm = mermaid(report["graph"])
-    b.append('<section id="map"><h2>Map of the change</h2>'
+    # Views (the visualization toolset) — chosen per change by the analysis.
+    for i, v in enumerate(report.get("views") or [], 1):
+        fn = VIEWS.get(v.get("kind"))
+        if not fn: continue
+        b.append(f'<section id="view-{i}" class="view"><h2>{E(v.get("title") or v["kind"])} <span class="cnt">{E(v["kind"])}</span></h2>'
+                 + (f'<div class="narr" style="margin-bottom:.6rem">{E(v["narrative"])}</div>' if v.get("narrative") else "")
+                 + '<div class="legend"><span><i style="background:#1f5a3a"></i>new</span><span><i style="background:#6b4a12"></i>changed</span><span><i style="background:#6b1f1f"></i>deleted</span><span><i style="background:#1f3f6b"></i>moved</span><span>⟨/⟩ tap a file to see its changed code</span></div>'
+                 + fn(v) + '</section>')
+
+    mm = mermaid(report["graph"]) if report["graph"].get("nodes") else ""
+    b.append('<section id="map"' + ('' if mm else ' class="hidden"') + '><h2>Map of the change</h2>'
              '<div class="legend"><span><i style="background:#1f5a3a"></i>added</span><span><i style="background:#6b4a12"></i>modified</span><span><i style="background:#6b1f1f"></i>removed</span><span><i style="background:#1f3f6b"></i>moved / renamed</span><span><i style="background:#3b2a6b"></i>split</span><span>→ calls · ⇒ data flows · ⇢ imports/moved</span></div>')
     if mm:
         b.append(f'<div class="map"><pre class="mermaid">{E(mm)}</pre></div><div class="map-tools"><button class="btn hidden" id="map-zoom">Actual size</button></div><div class="map-list" id="map-fallback">{map_list(report["graph"])}</div>')
@@ -227,9 +276,11 @@ def main():
     rest = [f for f in model["files"] if f["substantive_hunks"] and f["path"] not in flagged_files]
     b.append(f'<section id="unreviewed"><h2>Everything else that changed <span class="cnt">{len(rest)} files, nothing flagged</span></h2><div class="unrev">')
     b.append('<div class="empty">Substantive but not surfaced. Fresh eyes welcome — ⚑ raises a gut-flag for Claude to dig into.</div>')
+    # One store of per-file changed code (substantive hunks, capped) — read lazily by the
+    # "Everything else" rows and by every ⟨/⟩ file chip in the views.
     MAX_LINES = 400
-    for f in rest:
-        why = (report.get("unreviewed_notes") or {}).get(f["path"], "")
+    store = {}
+    for f in model["files"]:
         hs = [h["id"] for h in f["hunks"] if h["category"] == "substantive"]
         body, used, cut = [], 0, 0
         for hid in hs:
@@ -239,9 +290,14 @@ def main():
             body.append(hunk_html(h, path)); used += len(h.lines)
         if cut: body.append(f'<div class="empty">… {cut} more lines not shown (open the file for the rest)</div>')
         status = f["status"] + (f' ← {f["old_path"]}' if f.get("old_path") else "") + (f' ← moved from {f["moved_from"]}' if f.get("moved_from") else "")
-        b.append(f'<div class="row fold-row"><span class="tw">▶</span><span class="rp">{E(f["path"])} <span style="color:var(--fg3)">· {E(status)} · {f["substantive_hunks"]} hunk{"s" if f["substantive_hunks"] != 1 else ""}{(" · " + E(why)) if why else ""}</span></span><button data-file="{E(f["path"])}">⚑</button></div>'
-                 f'<div class="row-body">{"".join(body) or "<div class=empty>no substantive hunks</div>"}</div>')
+        store[f["path"]] = {"status": status, "html": "".join(body) or '<div class="empty">no substantive hunks (folded as noise: ' + E(f.get("noise_kind") or ", ".join(sorted({h["category"] for h in f["hunks"]})) or "—") + ')</div>'}
+    for f in rest:
+        why = (report.get("unreviewed_notes") or {}).get(f["path"], "")
+        b.append(f'<div class="row fold-row" data-file="{E(f["path"])}"><span class="tw">▶</span><span class="rp">{E(f["path"])} <span style="color:var(--fg3)">· {E(store[f["path"]]["status"])} · {f["substantive_hunks"]} hunk{"s" if f["substantive_hunks"] != 1 else ""}{(" · " + E(why)) if why else ""}</span></span><button data-file="{E(f["path"])}">⚑</button></div>'
+                 f'<div class="row-body" data-file="{E(f["path"])}"><div class="row-code"></div><div class="row-close"><button class="btn">▲ Collapse {E(os.path.basename(f["path"]))}</button></div></div>')
     b.append("</div></section>")
+    b.append('<script type="application/json" id="file-store">' + json.dumps(store).replace("</", "<\\/") + '</script>')
+    b.append('<div class="sheet-bg" id="sheet-bg"></div><div class="sheet" id="sheet"><div class="sheet-h"><span class="sheet-t" id="sheet-t"></span><button class="btn" id="sheet-x">✕</button></div><div class="sheet-b" id="sheet-b"></div></div>')
 
     data = {"report_id": report_id, "repo": meta.get("repo", ""), "range_label": meta.get("range_label", ""),
             "findings": [{"id": f["id"], "severity": f["severity"], "tags": f.get("tags", [])} for f in findings]}

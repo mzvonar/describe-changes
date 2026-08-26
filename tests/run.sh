@@ -109,6 +109,9 @@ cat > "$OUT/report.json" <<'J'
                  "verify":"Was persistence intended here, and is upsert (overwrite) the right semantics?",
                  "why_human":"Intent and overwrite semantics are judgement calls; no test covers it.",
                  "file":"src/api/users.ts","lines":"6","hunks":["F1H1"],"tags":["divergence","data"]} ],
+  "views": [ {"kind":"adoption","title":"saveUser adoption","root":{"label":"saveUser()","file":"src/api/users.ts","change":"modified"},"uses":[{"label":"big-a","file":"src/util/big-a.ts","change":"added"}]},
+             {"kind":"flow","title":"Reshuffle","steps":[{"label":"rename strings→text","change":"renamed","file":"src/util/text.ts"},{"label":"split big","change":"split","then":[{"label":"big-a","file":"src/util/big-a.ts","change":"added"}]}]},
+             {"kind":"screen","title":"Mock","screen":{"label":"Page","change":"modified","children":[{"slot":"header","label":"Header","change":"added","file":"src/api/users.ts"}]}} ],
   "folded": [], "unreviewed_notes": {"script.py":"indentation-sensitive; one added early return"} }
 J
 python3 - "$OUT" <<'PY'
@@ -124,6 +127,8 @@ python3 "$S/render-report.py" --dir "$OUT"
 grep -q 'data-id="C1"' "$OUT/index.html" || fail "finding card missing"
 grep -q 'db.upsert' "$OUT/index.html" || fail "hunk snippet not embedded"
 grep -q 'class="mermaid"' "$OUT/index.html" || fail "mermaid map missing"
+grep -q 'class="adoption"' "$OUT/index.html" && grep -q 'class="flow"' "$OUT/index.html" && grep -q 'class="screen"' "$OUT/index.html" || fail "views missing"
+grep -q 'id="file-store"' "$OUT/index.html" && grep -q 'data-open="src/api/users.ts"' "$OUT/index.html" || fail "file store / chips missing"
 grep -q 'Renamed files' "$OUT/index.html" || fail "fold card missing"
 grep -q 'row fold-row' "$OUT/index.html" && grep -A3 'row fold-row' "$OUT/index.html" | grep -q 'row-body' || fail "everything-else rows not expandable"
 
