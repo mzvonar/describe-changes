@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "description": "After an agent implements a task, present the change to the human reviewer: intent + summary, a visual map of what calls/flows/moved where, and a tiny ranked list (critical/medium/low) of what a human must verify — with renames, moves, formatting and lockfile noise folded away. Chat view + mobile-first HTML report with feedback buttons that teach the skill.",
   "author": { "name": "Martin Zvonár" },
-  "homepage": "https://github.com/your-org/describe-changes",
-  "repository": "https://github.com/your-org/describe-changes",
+  "homepage": "https://github.com/mzvonar/describe-changes",
+  "repository": "https://github.com/mzvonar/describe-changes",
   "license": "MIT",
   "keywords": ["code-review", "diff", "human-review", "agentic", "mobile", "ownership"]
 }
