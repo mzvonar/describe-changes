@@ -259,6 +259,15 @@ __BODY__
   const KEY = 'dc-fb:' + R.report_id;
   const served = location.protocol.startsWith('http');
   let fb = []; try { fb = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch(e) {}
+  // Feedback belongs to the REPORT, not to this browser. Events the server already holds are
+  // baked into the page at render time and merged in here, so a re-render — or a second device,
+  // or cleared site data — never shows a card as un-verified when someone verified it.
+  const sig = e => [e.ts, e.type, e.finding || '', e.check || '', e.check_key || '', e.file || '', e.id || ''].join('|');
+  {
+    const seen = new Set(fb.map(sig));
+    (R.prior || []).forEach(e => { if (!seen.has(sig(e))) { seen.add(sig(e)); fb.push(Object.assign({}, e, {sent: true})); } });
+    fb.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  }
   const $ = (s, r) => (r||document).querySelector(s), $$ = (s, r) => Array.from((r||document).querySelectorAll(s));
   const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1600); };
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(fb)); } catch(e) {} status(); };
@@ -344,11 +353,15 @@ __BODY__
   // ---- How to check: verified ticks + "didn't work" notes ------------------------------------
   // Replayed from the event log rather than kept in a second store, same as the finding buttons:
   // one source of truth means a reload cannot disagree with what was actually reported.
-  const ckState = new Map(), ckNote = new Map();
+  // Keyed twice: by the card's CONTENT hash (survives a re-render, and only while the steps and
+  // expectation are unchanged) and by its V-id (legacy events, and a readable fallback). The id is
+  // positional — re-authoring can hand V7 to a different capability — so the key wins where both
+  // exist, and an edited card starts unverified because the reader verified the old wording.
+  const ckState = new Map(), ckNote = new Map(), ckKeyState = new Map(), ckKeyNote = new Map();
   fb.forEach(e => {
-    if (e.type === 'check_verified' && e.check) ckState.set(e.check, true);
-    if (e.type === 'undo' && e.undo === 'check_verified' && e.check) ckState.set(e.check, false);
-    if (e.type === 'check_note' && e.check) ckNote.set(e.check, e.text || '');
+    if (e.type === 'check_verified') { if (e.check) ckState.set(e.check, true); if (e.check_key) ckKeyState.set(e.check_key, true); }
+    if (e.type === 'undo' && e.undo === 'check_verified') { if (e.check) ckState.set(e.check, false); if (e.check_key) ckKeyState.set(e.check_key, false); }
+    if (e.type === 'check_note') { if (e.check) ckNote.set(e.check, e.text || ''); if (e.check_key) ckKeyNote.set(e.check_key, e.text || ''); }
   });
   const ckCount = $('#ck-count');
   const refreshCount = () => {
@@ -357,25 +370,27 @@ __BODY__
     ckCount.textContent = done + ' of ' + ckCount.dataset.total + ' verified';
   };
   $$('.card.ck').forEach(card => {
-    const id = card.dataset.id;
+    const id = card.dataset.id, key = card.dataset.key || null;
+    const priorState = (key && ckKeyState.has(key)) ? ckKeyState.get(key) : ckState.get(id);
+    const priorNote = (key && ckKeyNote.has(key)) ? ckKeyNote.get(key) : ckNote.get(id);
     const box = $('.ck-done input', card), ta = $('.ck-mark textarea', card);
     if (box) {
-      box.checked = !!ckState.get(id);
+      box.checked = !!priorState;
       card.classList.toggle('done', box.checked);
       box.addEventListener('change', () => {
         card.classList.toggle('done', box.checked);
-        if (box.checked) event('check_verified', null, {check: id});
-        else event('undo', null, {undo: 'check_verified', check: id});
+        if (box.checked) event('check_verified', null, {check: id, check_key: key});
+        else event('undo', null, {undo: 'check_verified', check: id, check_key: key});
         refreshCount();
         toast(box.checked ? id + ' marked verified' : id + ' unmarked');
       });
     }
     if (ta) {
-      const prior = ckNote.get(id); if (prior) { ta.value = prior; ta.classList.add('has'); }
+      if (priorNote) { ta.value = priorNote; ta.classList.add('has'); }
       ta.addEventListener('change', () => {
         const text = ta.value.trim();
         ta.classList.toggle('has', !!text);
-        if (text) { event('check_note', null, {check: id, text}); toast('Noted — Claude will see it'); }
+        if (text) { event('check_note', null, {check: id, check_key: key, text}); toast('Noted — Claude will see it'); }
       });
     }
   });

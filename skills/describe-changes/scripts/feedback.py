@@ -88,7 +88,8 @@ def cmd_ingest(a):
         c = ctx["checks"].get(ev.get("check") or "")
         out.append(base(ctx, ev.get("type", "unknown"), ts=ev.get("ts") or now(), source="ui",
                         finding=f or ({"id": ev.get("finding")} if ev.get("finding") else None),
-                        check=c or ({"id": ev.get("check")} if ev.get("check") else None),
+                        check=(dict(c, key=ev.get("check_key")) if c else
+                               ({"id": ev.get("check"), "key": ev.get("check_key")} if ev.get("check") else None)),
                         status=ev.get("status"),
                         file=ev.get("file"), text=ev.get("text"), undo=ev.get("undo")))
     append(out)

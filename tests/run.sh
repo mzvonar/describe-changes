@@ -503,6 +503,36 @@ python3 "$S/feedback.py" notes --dir "$OUT" | grep -q '401 instead of 200' || fa
 python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'intended, ship it' || fail "notes: finding note not reported"
 printf '%s\n' '{"ts":"2026-01-01T00:00:07Z","type":"undo","undo":"check_verified","check":"V1"}' >> "$OUT/feedback.jsonl"
 python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'un-marked again: V1' || fail "notes: untick not reported"
+# A tick belongs to the REPORT, not to one browser and not to a positional id. It must survive a
+# re-render, and it must NOT survive an edit to the very steps the reader followed.
+python3 - "$OUT" "$S" <<'PY' || fail "check ticks do not survive a re-render (or survive an edit they should not)"
+import json, os, re, subprocess, sys
+d, S = sys.argv[1], sys.argv[2]
+html = open(os.path.join(d, "index.html")).read()
+keys = dict(re.findall(r'class="card ck" data-id="(V\d+)" data-key="([0-9a-f]+)"', html))
+if len(keys) < 2: print("FAIL: check cards carry no content key", keys); sys.exit(1)
+# The reader ticks V2 in the page: the event carries the content key, and the server stores it.
+with open(os.path.join(d, "feedback.jsonl"), "a") as fh:
+    fh.write(json.dumps({"ts": "2026-01-01T00:00:09Z", "type": "check_verified",
+                         "check": "V2", "check_key": keys["V2"]}) + "\n")
+def rendered():
+    subprocess.run([sys.executable, os.path.join(S, "render-report.py"), "--dir", d], check=True, capture_output=True)
+    return open(os.path.join(d, "index.html")).read()
+h = rendered()
+prior = json.loads(re.search(r'id="report-data">(.*?)</script>', h, re.S).group(1).replace("<\\/", "</"))["prior"]
+if not any(e.get("check_key") == keys["V2"] for e in prior):
+    print("FAIL: the re-rendered page does not carry the stored tick"); sys.exit(1)
+# Now edit that card's steps. Same V2, different content → the key moves and the tick must not follow.
+r = json.load(open(os.path.join(d, "report.json")))
+for c in r["how_to_check"]:
+    if c["id"] == "V2": c["steps"] = ["Something else entirely."]
+json.dump(r, open(os.path.join(d, "report.json"), "w"))
+h2 = rendered()
+keys2 = dict(re.findall(r'class="card ck" data-id="(V\d+)" data-key="([0-9a-f]+)"', h2))
+ok = keys2["V2"] != keys["V2"] and keys2["V1"] == keys["V1"]
+print("check identity OK" if ok else f"FAIL: keys {keys} -> {keys2}")
+sys.exit(0 if ok else 1)
+PY
 # digest: the same check events reach the MAINTAINER's view, with the check's identity attached.
 # They used to land in the generic event mix only — collected, never read.
 printf '%s\n' '{"ts":"2026-01-01T00:00:08Z","type":"check_run","check":"V2","status":401}' >> "$OUT/feedback.jsonl"

@@ -196,6 +196,20 @@ VIEWS = {"screen": view_screen, "flow": view_flow, "adoption": view_adoption}
 
 SURFACE_LABEL = {"ui": "screen", "api": "API", "cli": "command"}
 
+def check_key(c):
+    """A content hash of what the reader actually verified — feature, surface, where, setup, steps,
+    expect, request.
+
+    The `V<n>` id is positional: re-authoring the report can hand V7 to a different capability
+    entirely, so a tick replayed by id would mark a check nobody ran. Hashing the text means an
+    untouched card keeps its tick across any number of refreshes, and a card whose steps or
+    expectation changed correctly loses it — the reviewer verified the old wording, not this one.
+    `covered_by` is excluded: moving a spec file does not change what the reader has to do.
+    """
+    payload = json.dumps({k: c.get(k) for k in ("feature", "surface", "where", "setup", "steps", "expect", "request")},
+                         sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(payload.encode()).hexdigest()[:12]
+
 def check_card(c):
     """One shipped capability, with the steps to exercise it for real.
 
@@ -224,7 +238,7 @@ def check_card(c):
     # The tick lives in the HEADER so a card can be marked without expanding it — on a second pass a
     # reviewer is confirming a list, not re-reading it. The note lives in the body, next to the steps
     # it is about.
-    return (f'<div class="card ck" data-id="{E(c["id"])}"><div class="card-h"><span class="tw">▶</span>'
+    return (f'<div class="card ck" data-id="{E(c["id"])}" data-key="{E(check_key(c))}"><div class="card-h"><span class="tw">▶</span>'
             f'<label class="ck-done" title="Mark {E(c["id"])} verified"><input type="checkbox"><span></span></label>'
             f'<span class="pill check">{E(c["id"])}</span>'
             f'<div class="title">{E(c["feature"])}<small>{E(SURFACE_LABEL.get(surface, surface))}</small></div></div>'
@@ -394,7 +408,11 @@ def main():
     findings = sorted(report["findings"], key=lambda f: (SEV_ORDER[f["severity"]], int(re.sub(r"\D", "", f["id"]) or 0)))
     counts = {s: sum(1 for f in findings if f["severity"] == s) for s in SEV_ORDER}
     st = model["stats"]
-    report_id = report.get("report_id") or hashlib.md5((meta.get("repo", "") + meta.get("range_label", "") + meta.get("head_sha", "")).encode()).hexdigest()[:10]
+    # Deliberately NOT keyed on head_sha: report_id is the browser's localStorage bucket, and one
+    # more commit on the branch would otherwise orphan every tick, vote and note the reader left.
+    # The branch's report is one continuous conversation, however many times it is re-rendered.
+    report_id = report.get("report_id") or hashlib.md5(
+        (meta.get("repo", "") + "|" + (meta.get("branch") or meta.get("range_label", ""))).encode()).hexdigest()[:10]
     title = report["title"]
     tags = sorted({t for f in findings for t in f.get("tags", [])})
 
@@ -572,7 +590,14 @@ def main():
     b.append('<script type="application/json" id="hunk-store">' + json.dumps(hunk_store).replace("</", "<\\/") + '</script>')
     b.append('<div class="sheet-bg" id="sheet-bg"></div><div class="sheet" id="sheet"><div class="sheet-h"><span class="sheet-t" id="sheet-t"></span><button class="btn" id="sheet-x">✕</button></div><div class="sheet-b" id="sheet-b"></div></div>')
 
+    # Prior events travel WITH the page. Feedback used to live only in this browser's localStorage,
+    # so a re-render read on a second device — or after clearing site data — showed every card
+    # un-verified, silently discarding work someone had actually done. The report dir is the source
+    # of truth (serve.py appends to it); localStorage now only carries what has not been sent yet.
+    prior = [{k: v for k, v in e.items() if k in ("ts", "type", "finding", "file", "check", "check_key", "text", "undo", "id", "anchor")}
+             for e in read_jsonl("feedback.jsonl")][-800:]
     data = {"report_id": report_id, "repo": meta.get("repo", ""), "range_label": meta.get("range_label", ""),
+            "prior": prior,
             "findings": [{"id": f["id"], "severity": f["severity"], "tags": f.get("tags", [])} for f in findings]}
     out = tpl.replace("__TITLE__", E(title)).replace("__BODY__", "\n".join(b)).replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
     out_path = a.out or os.path.join(d, "index.html")
