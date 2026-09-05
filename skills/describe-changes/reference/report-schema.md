@@ -64,6 +64,32 @@ Keys marked ● are required.
     }
   ],
 
+  // Optional. One entry per SHIPPED user-facing capability, so a reviewer can exercise it for real
+  // instead of trusting the report. Omit for a change nobody can drive (pure refactor, infra, docs).
+  "how_to_check": [
+    {
+      "id": "V1",                                   // V<n>, unique
+      "feature": "Remove a member from an organization",
+      "surface": "ui",                              // ui | api | cli   (default ui)
+      "where": "/app/org/{slug}/settings/members",  // route, screen or command
+      "setup": "Sign in as an owner of an org that has two owners.",   // optional preconditions
+      "steps": ["Open Nastavenia → Členovia.", "Press Odstrániť on the other owner's row.", "Confirm."],
+      "expect": "The row disappears without a page reload and a success toast shows.",
+      "covered_by": "tests/e2e/specs/organization/member-removal.spec.ts"  // optional
+    },
+    {
+      "id": "V2", "feature": "Bulk import endpoint", "surface": "api",
+      "steps": ["Send the request below.", "Re-open the list — the rows are there."],
+      "expect": "201 with {imported: 3}.",
+      // `request` turns the card into a runnable one: copy-as-curl, a Postman collection for the
+      // whole report, and an inline send. Only for surface:"api".
+      "request": { "method": "POST", "path": "/api/v1/import",
+                   "headers": {"content-type": "application/json"},
+                   "body": {"rows": []},
+                   "note": "Needs a signed-in session cookie." }
+    }
+  ],
+
   "folded": [ /* copy diff-model.json → folds verbatim */ ],          // ●
   "unreviewed_notes": {                                              // substantive files with no finding: why
     "src/pwa/components/StepCard.tsx": "prop pass-through only; typed end to end"

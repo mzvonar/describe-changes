@@ -101,6 +101,14 @@ cat > "$OUT/report.json" <<'J'
   "summary": "Renames the string helpers module, splits the oversized util file in two, and makes saveUser persist via db.upsert — a behaviour change beyond the refactor.",
   "confession": [ {"point":"Never ran the persistence path against a real db.","detail":"The test fake accepts any shape, so upsert's overwrite semantics are unverified."},
                   {"point":"The split point between big-a and big-b was a guess."} ],
+  "how_to_check": [ {"id":"V1","feature":"Saving a user persists it","surface":"ui","where":"/users",
+                     "setup":"Sign in.","steps":["Open /users.","Save a user that already exists."],
+                     "expect":"The existing row is overwritten, not duplicated.",
+                     "covered_by":"src/api/users.ts"},
+                    {"id":"V2","feature":"Save user endpoint","surface":"api",
+                     "steps":["Send the request.","Re-read the row."],"expect":"200 and one row.",
+                     "request":{"method":"POST","path":"/api/users","headers":{"x-demo":"1"},
+                                "body":{"id":1,"name":"a"},"note":"Needs a session cookie."}} ],
   "phases": [ {"id":"p1","title":"Module reshuffle","narrative":"Rename + split, imports follow.","files":["src/util/text.ts","src/util/big-a.ts","src/util/big-b.ts"]},
               {"id":"p2","title":"Persistence","narrative":"saveUser now writes to db.","files":["src/api/users.ts"]} ],
   "graph": { "nodes": [ {"id":"saveUser","label":"saveUser()","kind":"function","change":"modified","file":"src/api/users.ts"},
@@ -159,6 +167,26 @@ grep -q 'id="file-store"' "$OUT/index.html" && grep -q 'data-open="src/api/users
 # Every listed file opens its own diff (1.1.0). Phase lists were plain text before, which is the
 # one place a reader is handed filenames and then given no way to look at them.
 grep -q 'class="fpath" data-open="src/util/text.ts"' "$OUT/index.html" || fail "phase file paths are not clickable"
+# How to check: cards render, the API one is runnable, and the Postman collection is real JSON
+# carrying a {{base}} variable rather than a host baked in at render time.
+grep -q 'id="check"' "$OUT/index.html" || fail "how-to-check section missing"
+grep -q 'Save a user that already exists' "$OUT/index.html" || fail "check steps missing"
+grep -q 'data-act="curl"' "$OUT/index.html" && grep -q 'data-act="send"' "$OUT/index.html" || fail "api run controls missing"
+grep -q 'id="dl-postman"' "$OUT/index.html" || fail "postman download missing"
+python3 - "$OUT/index.html" <<'PY' || fail "postman collection is not usable"
+import json, re, sys
+h = open(sys.argv[1]).read()
+coll = json.loads(re.search(r'id="postman-store">(.*?)</script>', h, re.S).group(1).replace("<\\/", "</"))
+items = coll["item"]
+ok = (len(items) == 1 and items[0]["request"]["method"] == "POST"
+      and items[0]["request"]["url"]["raw"] == "{{base}}/api/users"
+      and json.loads(items[0]["request"]["body"]["raw"])["id"] == 1
+      and any(v["key"] == "base" for v in coll["variable"]))
+store = json.loads(re.search(r'id="check-store">(.*?)</script>', h, re.S).group(1).replace("<\\/", "</"))
+ok = ok and set(store) == {"V2"}          # only the runnable card is in the run store
+print("postman + check store OK" if ok else f"FAIL {json.dumps(coll)[:400]}")
+sys.exit(0 if ok else 1)
+PY
 grep -q 'class="fpath" data-open="src/util/big-a.ts"' "$OUT/index.html" || fail "folded-noise file paths are not clickable"
 python3 - "$OUT/index.html" <<'PY' || fail "clickable paths are not all backed by the file store"
 import json, re, sys

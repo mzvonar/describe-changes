@@ -179,6 +179,63 @@ def view_adoption(v):
 
 VIEWS = {"screen": view_screen, "flow": view_flow, "adoption": view_adoption}
 
+SURFACE_LABEL = {"ui": "screen", "api": "API", "cli": "command"}
+
+def check_card(c):
+    """One shipped capability, with the steps to exercise it for real.
+
+    The API affordances (curl / Postman / inline send) are built in the browser from `request`, not
+    baked in here, because they all depend on a base URL the reader picks at read time — their laptop,
+    a preview deployment, a colleague's tunnel.
+    """
+    surface = c.get("surface", "ui")
+    req = c.get("request") if surface == "api" else None
+    steps = "".join(f"<li>{E(s)}</li>" for s in c.get("steps", []))
+    where = f'<div class="ck-where">{E(c["where"])}</div>' if c.get("where") else ""
+    setup = f'<div class="kv"><b>First</b>{E(c["setup"])}</div>' if c.get("setup") else ""
+    expect = f'<div class="verify"><b>Expect</b>{E(c["expect"])}</div>' if c.get("expect") else ""
+    covered = (f'<div class="ck-cov">Regression cover: {fpath(c["covered_by"])}</div>'
+               if c.get("covered_by") else "")
+    api = ""
+    if req:
+        mutating = str(req.get("method", "GET")).upper() not in ("GET", "HEAD", "OPTIONS")
+        api = (f'<div class="ck-api" data-id="{E(c["id"])}">'
+               f'<div class="ck-req"><span class="m m-{E(str(req.get("method","GET")).lower())}">{E(str(req.get("method","GET")).upper())}</span>'
+               f'<code>{E(req["path"])}</code></div>'
+               + (f'<div class="ck-note">{E(req["note"])}</div>' if req.get("note") else "")
+               + '<div class="fb"><button data-act="curl">Copy as curl</button>'
+                 f'<button data-act="send" class="{"danger" if mutating else ""}">▶ Send{" (writes)" if mutating else ""}</button></div>'
+               + '<div class="ck-out"></div></div>')
+    return (f'<div class="card ck" data-id="{E(c["id"])}"><div class="card-h"><span class="tw">▶</span>'
+            f'<span class="pill check">{E(c["id"])}</span>'
+            f'<div class="title">{E(c["feature"])}<small>{E(SURFACE_LABEL.get(surface, surface))}</small></div></div>'
+            f'<div class="card-b">{where}{setup}<ol class="ck-steps">{steps}</ol>{expect}{api}{covered}</div></div>')
+
+def postman_collection(items, name):
+    """A Postman v2.1 collection of every runnable request in the report.
+
+    `{{base}}` stays a Postman variable rather than a resolved host: the collection is meant to be
+    shared and re-pointed, and a baked-in localhost is the reason exported collections rot.
+    """
+    reqs = []
+    for c in items:
+        req = c.get("request")
+        if not req: continue
+        headers = [{"key": k, "value": str(v)} for k, v in (req.get("headers") or {}).items()]
+        item = {"name": f'{c["id"]} · {c["feature"]}',
+                "request": {"method": str(req.get("method", "GET")).upper(), "header": headers,
+                            "url": {"raw": "{{base}}" + req["path"], "host": ["{{base}}"],
+                                    "path": [p for p in req["path"].lstrip("/").split("/") if p]}}}
+        if req.get("body") is not None:
+            item["request"]["body"] = {"mode": "raw", "raw": json.dumps(req["body"], indent=2),
+                                       "options": {"raw": {"language": "json"}}}
+        if req.get("note"):
+            item["request"]["description"] = req["note"]
+        reqs.append(item)
+    return {"info": {"name": name, "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "variable": [{"key": "base", "value": "http://localhost:3000"}],
+            "item": reqs}
+
 def fold_card(g, known=None):
     # Folded files stay openable. The reader is told to skip this section, which is exactly why the
     # escape hatch matters: the one failure folding can cause is hiding a real change inside a
@@ -240,7 +297,9 @@ def main():
              + f'<span class="chip noise"><i class="dot"></i>{st["noise_pct"]}% folded</span></div>')
     # Listed in the order the page actually renders them — a nav that disagrees with the page is a
     # small lie the reader catches immediately, and it costs the report credibility it needs later.
-    b.append('<div class="toc"><a href="#summary">Summary</a><a href="#map">Map</a><a href="#phases">Phases</a><a href="#findings">Review</a><a href="#folded">Folded</a><a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a></div></header>')
+    b.append('<div class="toc"><a href="#summary">Summary</a><a href="#map">Map</a><a href="#phases">Phases</a><a href="#findings">Review</a>'
+             + ('<a href="#check">How to check</a>' if report.get("how_to_check") else "")
+             + '<a href="#folded">Folded</a><a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a></div></header>')
 
     # Intent leads, small and quiet — it FRAMES the summary instead of repeating it. Rendering it
     # after, as an equal-weight paragraph, is what made the two read as duplicates.
@@ -291,6 +350,26 @@ def main():
     else:
         b.append('<div class="empty">Nothing flagged. That is a claim, not a guarantee — the "Everything else" list below is what was looked at.</div>')
     b.append("</section>")
+
+    # How to check — after the findings (those are the priority) but before the noise, because it is
+    # the section a reviewer acts on when they decide not to take the report's word for it.
+    checks = report.get("how_to_check") or []
+    if checks:
+        runnable = [c for c in checks if c.get("request")]
+        b.append(f'<section id="check"><h2>How to check <span class="cnt">{len(checks)} feature{"s" if len(checks) != 1 else ""} you can drive yourself</span></h2>')
+        if runnable:
+            b.append('<div class="ck-bar"><label for="base-url">Base URL</label>'
+                     '<input id="base-url" type="url" spellcheck="false" placeholder="http://localhost:3000">'
+                     '<button class="btn" id="dl-postman">⬇ Postman collection</button></div>'
+                     '<div class="ck-warn">Requests are sent from this page to the URL above — a real server, with your '
+                     'cookies. Cross-origin calls need that server to allow this origin; when it does not, the browser '
+                     'blocks the send and the curl button is the way through.</div>')
+        b.extend(check_card(c) for c in checks)
+        b.append("</section>")
+        b.append('<script type="application/json" id="check-store">'
+                 + json.dumps({c["id"]: c["request"] for c in runnable}).replace("</", "<\\/") + "</script>")
+        b.append('<script type="application/json" id="postman-store">'
+                 + json.dumps(postman_collection(checks, f'{meta.get("repo", "change")} · {meta.get("branch", "")}'.strip(" ·"))).replace("</", "<\\/") + "</script>")
 
     folded = report.get("folded") or model["folds"]
     b.append(f'<section id="folded"><h2>Folded as noise <span class="cnt">{st["noise_pct"]}% of changed lines</span></h2>')

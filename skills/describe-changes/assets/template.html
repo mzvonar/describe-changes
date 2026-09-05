@@ -34,7 +34,11 @@ section>h2 .cnt{font-weight:500;letter-spacing:0;text-transform:none;font-size:.
 .card.sev-critical{border-left:4px solid var(--crit)}.card.sev-medium{border-left:4px solid var(--med)}.card.sev-low{border-left:4px solid var(--low)}
 .card-h{display:flex;align-items:flex-start;gap:.6rem;padding:.85rem 1rem;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
 .card-h:active{background:rgba(255,255,255,.03)}
-.card-h .tw{color:var(--fg3);font-size:.8rem;margin-top:.2rem;transition:transform .15s;flex-shrink:0}
+/* A twisty turns in place. It needs a box of its own to do that: inline text rotates about the
+   centre of however wide the glyph's box happens to be, so a caret that is also a flex item gets
+   dragged around an arc. Fixed square + inline-block + explicit origin pins it. */
+.tw{display:inline-block;flex:0 0 auto;width:1em;height:1em;line-height:1;text-align:center;color:var(--fg3);transform-origin:50% 50%;transition:transform .15s}
+.card-h .tw{font-size:.8rem;margin-top:.2rem}
 .card.open .card-h .tw{transform:rotate(90deg)}
 .card-b{display:none;padding:0 1rem 1rem;border-top:1px solid var(--line)}
 .card.open .card-b{display:block}
@@ -89,6 +93,27 @@ button.fpath:hover{border-color:var(--line2);color:var(--fg)}
 button.fpath:active{border-color:var(--info)}
 .fold li button.fpath,.fold li span{margin:.1rem 0}
 .legend{display:flex;flex-wrap:wrap;gap:.6rem;font-size:.75rem;color:var(--fg2);margin:.5rem 0}
+/* ---- How to check ---- */
+.pill.check{background:rgba(99,179,237,.16);color:var(--info)}
+.ck-bar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem}
+.ck-bar label{font-size:.75rem;color:var(--fg2)}
+.ck-bar input{flex:1;min-width:12rem;font:inherit;font-family:var(--mono);font-size:.78rem;background:var(--bg2);color:var(--fg);border:1px solid var(--line2);border-radius:8px;padding:.5rem .6rem;min-height:38px}
+.ck-warn{font-size:.78rem;color:var(--fg2);border-left:2px solid var(--warn,#d69e2e);padding-left:.6rem;margin-bottom:.8rem}
+.ck-where{font-family:var(--mono);font-size:.75rem;color:var(--info);word-break:break-all;margin-bottom:.5rem}
+.ck-steps{margin:.2rem 0 .6rem;padding-left:1.15rem;font-size:.9rem;color:var(--fg2)}
+.ck-steps li{margin:.28rem 0}
+.ck-cov{margin-top:.5rem;font-size:.75rem;color:var(--fg3)}
+.ck-api{margin-top:.7rem;border-top:1px solid var(--line);padding-top:.6rem}
+.ck-req{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-family:var(--mono);font-size:.8rem}
+.ck-req code{word-break:break-all;color:var(--fg)}
+.ck-req .m{font-size:.68rem;font-weight:700;letter-spacing:.04em;padding:.15rem .4rem;border-radius:5px;background:var(--bg2);border:1px solid var(--line2);color:var(--fg2)}
+.ck-req .m-get{color:#68d391;border-color:#2f855a}.ck-req .m-post{color:#f6ad55;border-color:#b7791f}
+.ck-req .m-put,.ck-req .m-patch{color:#63b3ed;border-color:#2b6cb0}.ck-req .m-delete{color:#fc8181;border-color:#c53030}
+.ck-note{font-size:.78rem;color:var(--fg3);margin:.35rem 0}
+.ck-out{margin-top:.5rem}
+.ck-out .st{font-family:var(--mono);font-size:.75rem;margin-bottom:.35rem}
+.ck-out .ok{color:#68d391}.ck-out .bad{color:#fc8181}
+.ck-out pre{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:.6rem;overflow:auto;max-height:16rem;font-family:var(--mono);font-size:.72rem;color:var(--fg2);white-space:pre-wrap;word-break:break-all}
 .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:.3rem;vertical-align:-2px}
 .map{background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);padding:.5rem;overflow:auto;-webkit-overflow-scrolling:touch}
 .map svg{height:auto;display:block;margin:0 auto}
@@ -102,11 +127,15 @@ button.fpath:active{border-color:var(--info)}
 .fold li ul{margin:.3rem 0 0 1rem}.fold li ul li{border:0;padding:.12rem 0;color:var(--fg3)}
 .unrev{font-family:var(--mono);font-size:.8rem}
 .unrev .row{display:flex;align-items:center;gap:.5rem;padding:.45rem 0;border-bottom:1px dashed var(--line)}
-.unrev .row span{flex:1;word-break:break-all}
+/* Only the PATH grows. This used to be `.row span{flex:1}`, which also matched the caret — a
+   `<span>` — so the twisty took an equal share of the row: a wide empty column on the left, the
+   path crushed into what was left, worst on a phone. It also caused the caret to swing in an arc
+   rather than turn: rotating a stretched box about its own centre moves the glyph with it. */
+.unrev .row .rp{flex:1;word-break:break-all}
 .unrev .row button{font:inherit;font-size:.7rem;padding:.35rem .55rem;border-radius:6px;border:1px solid var(--line2);background:var(--bg2);color:var(--fg2);min-height:34px}
 .unrev .row button.on{border-color:var(--crit);color:var(--crit)}
 .unrev .row.fold-row{cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
-.unrev .row .tw{color:var(--fg3);font-size:.7rem;transition:transform .15s;flex-shrink:0}
+.unrev .row .tw{font-size:.7rem}
 .unrev .row.open .tw{transform:rotate(90deg)}
 .unrev .row .rp{word-break:break-all}
 .unrev .row-body{display:none;padding:.5rem 0 .9rem 1.1rem;border-bottom:1px dashed var(--line)}
@@ -274,6 +303,79 @@ __BODY__
   // chips, phase paths, the uncommitted list — opens that file's changes, and anything added later
   // inherits it by carrying the attribute.
   document.addEventListener('click', ev => { const c = ev.target.closest('[data-open]'); if (c) { ev.preventDefault(); ev.stopPropagation(); openSheet(c.dataset.open); } });
+
+  // ---- How to check: curl / Postman / inline send -------------------------------------------
+  // The base URL is the reader's, not the author's: a report is read on a laptop, against a preview
+  // deploy, or through a tunnel, and a host baked in at render time is wrong for most of them.
+  let CHECKS = {}; try { CHECKS = JSON.parse(document.getElementById('check-store').textContent); } catch(e) {}
+  const baseInput = $('#base-url');
+  if (baseInput) {
+    const KEY = 'dc-base-url';
+    baseInput.value = localStorage.getItem(KEY) || 'http://localhost:3000';
+    baseInput.addEventListener('change', () => localStorage.setItem(KEY, baseInput.value.replace(/\/+$/, '')));
+    const base = () => (baseInput.value || 'http://localhost:3000').replace(/\/+$/, '');
+    const shq = s => "'" + String(s).replace(/'/g, `'\\''`) + "'";   // safe single-quoting for a shell
+    const toCurl = r => {
+      const parts = ['curl -i -X ' + r.method.toUpperCase(), shq(base() + r.path)];
+      for (const [k, v] of Object.entries(r.headers || {})) parts.push('-H ' + shq(k + ': ' + v));
+      if (r.body !== undefined && r.body !== null) {
+        if (!(r.headers && Object.keys(r.headers).some(h => h.toLowerCase() === 'content-type')))
+          parts.push("-H 'content-type: application/json'");
+        parts.push('-d ' + shq(JSON.stringify(r.body)));
+      }
+      // Session-cookie APIs are the common case here, and a curl that 401s teaches nothing.
+      parts.push("-b 'YOUR_SESSION_COOKIE'");
+      return parts.join(' \\\n  ');
+    };
+    $('#dl-postman').onclick = () => {
+      let coll = {}; try { coll = JSON.parse(document.getElementById('postman-store').textContent); } catch(e) {}
+      coll.variable = [{key: 'base', value: base()}];
+      const url = URL.createObjectURL(new Blob([JSON.stringify(coll, null, 2)], {type: 'application/json'}));
+      const a = document.createElement('a');
+      a.href = url; a.download = (coll.info && coll.info.name ? coll.info.name.replace(/[^\w.-]+/g, '-') : 'collection') + '.postman_collection.json';
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('Collection downloaded — {{base}} set to ' + base());
+    };
+    $$('.ck-api').forEach(box => {
+      const r = CHECKS[box.dataset.id]; if (!r) return;
+      const out = box.querySelector('.ck-out');
+      box.querySelector('[data-act="curl"]').onclick = async () => {
+        try { await navigator.clipboard.writeText(toCurl(r)); toast('curl copied'); }
+        catch(e) { out.innerHTML = '<pre></pre>'; out.querySelector('pre').textContent = toCurl(r); }
+      };
+      box.querySelector('[data-act="send"]').onclick = async ev => {
+        const writes = !['GET','HEAD','OPTIONS'].includes(r.method.toUpperCase());
+        if (writes && !confirm(r.method.toUpperCase() + ' ' + r.path + '\n\nThis sends a real request to ' + base() + ' and can change data. Continue?')) return;
+        const btn = ev.currentTarget; btn.disabled = true;
+        const started = performance.now();
+        out.innerHTML = '<div class="st">sending…</div>';
+        try {
+          const res = await fetch(base() + r.path, {
+            method: r.method.toUpperCase(),
+            headers: Object.assign(r.body !== undefined && r.body !== null ? {'content-type': 'application/json'} : {}, r.headers || {}),
+            body: r.body !== undefined && r.body !== null ? JSON.stringify(r.body) : undefined,
+            credentials: 'include',
+          });
+          const ms = Math.round(performance.now() - started);
+          const text = await res.text();
+          let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch(e) {}
+          out.innerHTML = '<div class="st ' + (res.ok ? 'ok' : 'bad') + '"></div><pre></pre>';
+          out.querySelector('.st').textContent = res.status + ' ' + res.statusText + ' · ' + ms + ' ms';
+          out.querySelector('pre').textContent = pretty.slice(0, 20000) || '(empty body)';
+          event('check_run', null, {check: box.dataset.id, status: res.status});
+        } catch (err) {
+          // A blocked cross-origin call and a dead server look identical from here — fetch reports
+          // both as an opaque TypeError — so say so rather than guessing which one it was.
+          out.innerHTML = '<div class="st bad"></div><pre></pre>';
+          out.querySelector('.st').textContent = 'request failed';
+          out.querySelector('pre').textContent = String(err) +
+            '\n\nThe browser reports a blocked cross-origin request and an unreachable server the same way.' +
+            '\nCheck the server is up at ' + base() + ', that it allows this origin (' + location.origin + '),' +
+            '\nand otherwise use “Copy as curl”, which has neither restriction.';
+        } finally { btn.disabled = false; }
+      };
+    });
+  }
   $('#sheet-x').onclick = closeSheet; sheetBg.onclick = closeSheet; document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeSheet(); });
   $$('.unrev .row-close button').forEach(b => b.onclick = () => { const row = b.closest('.row-body').previousElementSibling; row.classList.remove('open'); row.scrollIntoView({block: 'center'}); });
   // gut flags on unreviewed files

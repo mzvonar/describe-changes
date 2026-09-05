@@ -120,6 +120,15 @@ the exact shape in `reference/report-schema.md`. The non-negotiables:
 - **Graph** = only change-relevant symbols (functions, components, types, modules, stores), ≤ ~25
   nodes, edges of kind `calls | dataflow | imports | renders | moved_to | split_into | extends | reads | writes`.
   Use `diff-model.json`'s `symbol_moves` and `moved_from` for `moved`/`split`/`renamed` nodes.
+- **`how_to_check`:** one entry per capability this change actually SHIPPED, with the steps to drive
+  it — the reviewer's way to stop trusting the report. Write steps someone who has never seen the
+  feature can follow: where to start, what to click, what they should see (`expect`). Name real
+  buttons and routes, not component names. Cover what the change *added or altered*, not the whole
+  product; omit the section entirely for a change nobody can drive (pure refactor, infra, docs).
+  Set `surface: "api"` plus a `request` for anything HTTP-callable and the page gives the reader
+  copy-as-curl, a Postman collection and an inline send against a base URL they choose. Skip
+  `request` for a server action or RPC that has no addressable endpoint — a card that cannot be run
+  is still a good card, and a fake endpoint is worse than none.
 - **`folded`:** copy `diff-model.json` → `folds` verbatim (you may add a one-line `title` tweak; never
   invent folds). **`unreviewed_notes`:** one clause per substantive-but-unflagged file saying why it
   didn't make the cut (the honest "I looked, nothing to ask" list).

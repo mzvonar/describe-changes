@@ -85,6 +85,29 @@ def main():
         errs.append(f"{counts['critical']} critical findings > budget {MAX_CRITICAL}. If everything is critical, nothing is — demote.")
     if counts["medium"] > MAX_MEDIUM: warns.append(f"{counts['medium']} medium findings > soft budget {MAX_MEDIUM}")
 
+    # How-to-check: the section exists so a reviewer can exercise the change instead of trusting the
+    # report, so a step list that cannot be followed is worse than no card at all.
+    check_ids = set()
+    for i, c in enumerate(r.get("how_to_check") or []):
+        cid = c.get("id", f"#{i}")
+        if cid in check_ids: errs.append(f"duplicate how_to_check id {cid}")
+        check_ids.add(cid)
+        if not re.fullmatch(r"V\d+", str(cid)): errs.append(f"how_to_check {cid}: id must be V<n>")
+        if not c.get("feature"): errs.append(f"how_to_check {cid}: missing 'feature'")
+        if not c.get("steps"): errs.append(f"how_to_check {cid}: needs at least one step")
+        if not c.get("expect"): warns.append(f"how_to_check {cid}: no 'expect' — a step list with no stated outcome cannot be failed")
+        surface = c.get("surface", "ui")
+        if surface not in ("ui", "api", "cli"): errs.append(f"how_to_check {cid}: surface must be ui|api|cli (got {surface!r})")
+        req = c.get("request")
+        if req:
+            if surface != "api": warns.append(f"how_to_check {cid}: 'request' is only meaningful with surface:\"api\"")
+            if not req.get("method") or not req.get("path"):
+                errs.append(f"how_to_check {cid}: request needs 'method' and 'path'")
+            elif not str(req["path"]).startswith("/"):
+                errs.append(f"how_to_check {cid}: request.path must start with '/' (the base URL is chosen in the page)")
+        elif surface == "api":
+            warns.append(f"how_to_check {cid}: surface is api but there is no 'request' — no curl, Postman entry or inline send can be offered")
+
     g = r["graph"]; node_ids = {n.get("id") for n in g.get("nodes", [])}
     for n in g.get("nodes", []):
         for key in ("id", "label", "kind", "change"):
