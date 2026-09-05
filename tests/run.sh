@@ -40,6 +40,9 @@ export function format(x: { a: number, b: number }) {
 F
 printf 'def f(x):\n    if x:\n        return 1\n    return 2\n' > script.py
 printf '{"lockfileVersion": 3}\n' > package-lock.json
+# A file that will receive a COMMENT-ONLY change, so the run produces a comment-only fold whose
+# hunks must still be viewable from the fold card.
+printf '// old note about totals\nexport function total(n: number[]) {\n  return n.reduce((a, b) => a + b, 0);\n}\n' > src/util/notes.ts
 git add -A && git commit -qm init
 
 git mv src/util/strings.ts src/util/text.ts
@@ -69,6 +72,7 @@ export function format(x: { a: number; b: number }) {
 F
 printf 'def f(x):\n    if x:\n        return 1\n        return 3\n    return 2\n' > script.py
 printf '{"lockfileVersion": 3, "x": 1}\n' > package-lock.json
+printf '// new note: totals ignore NaN\nexport function total(n: number[]) {\n  return n.reduce((a, b) => a + b, 0);\n}\n' > src/util/notes.ts
 git add -A
 
 OUT="$(bash "$S/collect-diff.sh" --staged | tail -1 | sed 's/^OUT=//')"
@@ -143,7 +147,7 @@ import re, sys
 h = open(sys.argv[1]).read()
 body = h.split('<div class="toc"', 1)[1]
 SECTIONS = ('id="summary"', 'id="view-1"', 'id="map"', 'id="phases"', 'id="findings"',
-            'id="folded"', 'id="conversation"', 'id="unreviewed"')
+            'id="conversation"', 'id="unreviewed"', 'id="folded"')   # noise LAST
 order = [s for s in SECTIONS if s in body]
 pos = [body.index(s) for s in order]
 ok = pos == sorted(pos) and body.index('id="map"') < body.index('id="phases"')
@@ -191,6 +195,23 @@ print("postman + check store OK" if ok else f"FAIL {json.dumps(coll)[:400]}")
 sys.exit(0 if ok else 1)
 PY
 grep -q 'class="fpath" data-open="src/util/big-a.ts"' "$OUT/index.html" || fail "folded-noise file paths are not clickable"
+# A fold entry opens ITS OWN hunk, not the file's substantive diff — and that hunk must exist in the
+# store, since the file store carries substantive hunks only. Without both, the moved import or the
+# reworded comment a fold card is about renders nowhere in the report.
+python3 - "$OUT/index.html" <<'PY' || fail "folded hunks are not viewable"
+import json, re, sys
+h = open(sys.argv[1]).read()
+store = json.loads(re.search(r'id="hunk-store">(.*?)</script>', h, re.S).group(1).replace("<\\/", "</"))
+refs = re.findall(r'data-open-hunks="([^"]+)"', h)
+ids = {i for r in refs for i in r.split(",")}
+missing = sorted(ids - set(store))
+ok = bool(refs) and not missing and all(store.values())
+print("fold hunks viewable" if ok else f"FAIL refs={refs[:3]} missing={missing}")
+sys.exit(0 if ok else 1)
+PY
+# The gut-flag wiring must not swallow the row's Collapse button (it did: `.unrev button` matched
+# both, and the later assignment replaced the collapse handler outright).
+grep -q "\$\$('.unrev button\[data-file\]')" "$OUT/index.html" || fail "gut-flag selector is not scoped to the flag buttons"
 python3 - "$OUT/index.html" <<'PY' || fail "clickable paths are not all backed by the file store"
 import json, re, sys
 html = open(sys.argv[1]).read()

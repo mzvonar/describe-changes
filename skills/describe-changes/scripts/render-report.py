@@ -242,7 +242,22 @@ def postman_collection(items, name):
             "variable": [{"key": "base", "value": "http://localhost:3000"}],
             "item": reqs}
 
-def fold_card(g, known=None):
+def fold_ref(path, hunk_ids, hunks, label=None):
+    """A file inside a fold card, opening the FOLDED hunks for that file — not its whole diff.
+
+    The distinction is the point of the section. A file listed under "import-only changes" usually
+    also has substantive hunks elsewhere (the repository that gained three functions AND re-pointed
+    one import); opening it to the substantive diff answers a question the reader did not ask and
+    hides the one line the card is actually about. Worse, a folded hunk is otherwise rendered
+    NOWHERE — the import that justified the fold was unviewable in the whole report.
+    """
+    mine = [hid for hid in (hunk_ids or []) if hid in hunks and hunks[hid][1] == path]
+    if not mine:
+        return fpath(path, known=None) if label is None else f"<span>{E(label or path)}</span>"
+    return (f'<button class="fpath" data-open-hunks="{E(",".join(mine))}" data-open-label="{E(path)}"'
+            f' title="Show the folded change in {E(path)}">{E(label or path)}</button>')
+
+def fold_card(g, known=None, hunks=None):
     # Folded files stay openable. The reader is told to skip this section, which is exactly why the
     # escape hatch matters: the one failure folding can cause is hiding a real change inside a
     # "rename", and a reviewer who suspects that must be able to check without leaving the page.
@@ -250,15 +265,26 @@ def fold_card(g, known=None):
     for it in g["items"]:
         sub = ""
         if it.get("followers"):
-            sub = "<ul>" + "".join(f'<li>{fpath(x["file"], known)} — {E(x["detail"])}</li>' for x in it["followers"]) + "</ul>"
+            sub = ("<ul>" + "".join(
+                f'<li>{fold_ref(x["file"], x.get("hunk_ids"), hunks or {}) if x.get("hunk_ids") else fpath(x["file"], known)}'
+                f' — {E(x["detail"])}</li>' for x in it["followers"]) + "</ul>")
         if it.get("files"):
-            sub = '<details class="more"><summary>show files</summary><ul>' + "".join(f'<li>{fpath(x, known)}</li>' for x in it["files"]) + "</ul></details>"
+            sub = ('<details class="more"><summary>show files</summary><ul>'
+                   + "".join(f'<li>{fold_ref(x, it.get("hunk_ids"), hunks or {})}</li>' for x in it["files"])
+                   + "</ul></details>")
             n = len(it["files"]); lab = f'unused imports dropped in {n} file{"s" if n != 1 else ""}' if it["module"] == "(imports removed)" else f'{E(it["module"])} <span style="color:var(--fg3)">← now imported in {n} file{"s" if n != 1 else ""}</span>'
             items.append(f'<li>{lab}{sub}</li>'); continue
         if it.get("targets"):
             sub = "<ul>" + "".join(f'<li>→ {fpath(t["path"], known)} ({int(t["overlap"]*100)}% of its lines came from the source)</li>' for t in it["targets"]) + "</ul>"
-        # `detail` is a sentence, not a path — only the bare-file form becomes a control.
-        head = E(it["detail"]) if it.get("detail") else fpath(it["file"], known)
+        # An item that names a real file AND its hunks becomes a control, whatever `detail` says —
+        # for a comment-only fold `detail` is the hunk header (`@@ -27,6 +27,10 @@`), a label rather
+        # than prose, and treating it as prose is what left those hunks unviewable. Items whose
+        # `file` is a module name rather than a path fall back to plain text via fold_ref.
+        if it.get("hunk_ids") and it.get("file"):
+            label = f'{it["file"]}{(" · " + it["detail"]) if it.get("detail") else ""}'
+            head = fold_ref(it["file"], it["hunk_ids"], hunks or {}, label=label)
+        else:
+            head = E(it["detail"]) if it.get("detail") else fpath(it["file"], known)
         items.append(f'<li>{head}{sub}</li>')
     n = g["count"] + sum(len(it.get("followers", [])) for it in g["items"])
     return f'''<div class="card fold"><div class="card-h"><span class="tw">▶</span><span class="pill noise">{n}</span><div class="title">{E(g["title"])}</div></div>
@@ -305,7 +331,7 @@ def main():
     # small lie the reader catches immediately, and it costs the report credibility it needs later.
     b.append('<div class="toc"><a href="#summary">Summary</a><a href="#map">Map</a><a href="#phases">Phases</a><a href="#findings">Review</a>'
              + ('<a href="#check">How to check</a>' if report.get("how_to_check") else "")
-             + '<a href="#folded">Folded</a><a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a></div></header>')
+             + '<a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a><a href="#folded">Folded</a></div></header>')
 
     # Intent leads, small and quiet — it FRAMES the summary instead of repeating it. Rendering it
     # after, as an equal-weight paragraph, is what made the two read as duplicates.
@@ -378,9 +404,6 @@ def main():
                  + json.dumps(postman_collection(checks, f'{meta.get("repo", "change")} · {meta.get("branch", "")}'.strip(" ·"))).replace("</", "<\\/") + "</script>")
 
     folded = report.get("folded") or model["folds"]
-    b.append(f'<section id="folded"><h2>Folded as noise <span class="cnt">{st["noise_pct"]}% of changed lines</span></h2>')
-    b.extend(fold_card(g, known_paths) for g in folded) if folded else b.append('<div class="empty">No noise detected.</div>')
-    b.append("</section>")
 
     # Conversation: comments (feedback.jsonl, type=comment) + answers (answers.jsonl)
     def read_jsonl(name):
@@ -433,7 +456,29 @@ def main():
         b.append(f'<div class="row fold-row" data-file="{E(f["path"])}"><span class="tw">▶</span><span class="rp">{E(f["path"])} <span style="color:var(--fg3)">· {E(store[f["path"]]["status"])} · {f["substantive_hunks"]} hunk{"s" if f["substantive_hunks"] != 1 else ""}{(" · " + E(why)) if why else ""}</span></span><button data-file="{E(f["path"])}">⚑</button></div>'
                  f'<div class="row-body" data-file="{E(f["path"])}"><div class="row-code"></div><div class="row-close"><button class="btn">▲ Collapse {E(os.path.basename(f["path"]))}</button></div></div>')
     b.append("</div></section>")
+
+    # Noise goes LAST. Everything above it is something the reader must act on or account for;
+    # this is the register of what was deliberately hidden, which matters for trust but never
+    # competes for attention with the findings or the substantive-but-unflagged list.
+    b.append(f'<section id="folded"><h2>Folded as noise <span class="cnt">{st["noise_pct"]}% of changed lines</span></h2>')
+    b.extend(fold_card(g, known_paths, hunks) for g in folded) if folded else b.append('<div class="empty">No noise detected.</div>')
+    b.append("</section>")
+
     b.append('<script type="application/json" id="file-store">' + json.dumps(store).replace("</", "<\\/") + '</script>')
+    # Folded hunks, keyed by id. The file store holds only SUBSTANTIVE hunks, so without this the
+    # very lines a fold card is about — the moved import, the reworded comment — render nowhere in
+    # the report, and "show files" opened the file's unrelated real changes instead.
+    # Walk followers too — an import rewrite nested under the rename it follows is exactly the kind
+    # of hunk a reader opens to confirm the rename really was only a rename.
+    fold_hunk_ids = {
+        hid
+        for g in folded
+        for it in g.get("items", [])
+        for node in (it, *it.get("followers", []))
+        for hid in (node.get("hunk_ids") or [])
+    }
+    hunk_store = {hid: hunk_html(*hunks[hid]) for hid in sorted(fold_hunk_ids) if hid in hunks}
+    b.append('<script type="application/json" id="hunk-store">' + json.dumps(hunk_store).replace("</", "<\\/") + '</script>')
     b.append('<div class="sheet-bg" id="sheet-bg"></div><div class="sheet" id="sheet"><div class="sheet-h"><span class="sheet-t" id="sheet-t"></span><button class="btn" id="sheet-x">✕</button></div><div class="sheet-b" id="sheet-b"></div></div>')
 
     data = {"report_id": report_id, "repo": meta.get("repo", ""), "range_label": meta.get("range_label", ""),

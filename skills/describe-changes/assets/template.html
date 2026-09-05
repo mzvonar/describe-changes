@@ -315,7 +315,21 @@ __BODY__
   // Delegated on [data-open], not on a class: every file reference anywhere in the report — view
   // chips, phase paths, the uncommitted list — opens that file's changes, and anything added later
   // inherits it by carrying the attribute.
-  document.addEventListener('click', ev => { const c = ev.target.closest('[data-open]'); if (c) { ev.preventDefault(); ev.stopPropagation(); openSheet(c.dataset.open); } });
+  let HUNKS = {}; try { HUNKS = JSON.parse(document.getElementById('hunk-store').textContent); } catch(e) {}
+  const openHunks = (ids, label) => {
+    const html = ids.split(',').map(id => HUNKS[id] || '').join('');
+    $('#sheet-t').textContent = label + ' · folded change';
+    $('#sheet-b').innerHTML = html || '<div class="empty">this hunk was not captured</div>';
+    sheet.classList.add('show'); sheetBg.classList.add('show');
+  };
+  document.addEventListener('click', ev => {
+    // Folded hunks win over the whole-file view: inside a fold card the reader asked about THAT
+    // change, not everything else the file happens to contain.
+    const fh = ev.target.closest('[data-open-hunks]');
+    if (fh) { ev.preventDefault(); ev.stopPropagation(); openHunks(fh.dataset.openHunks, fh.dataset.openLabel || ''); return; }
+    const c = ev.target.closest('[data-open]');
+    if (c) { ev.preventDefault(); ev.stopPropagation(); openSheet(c.dataset.open); }
+  });
 
   // ---- How to check: verified ticks + "didn't work" notes ------------------------------------
   // Replayed from the event log rather than kept in a second store, same as the finding buttons:
@@ -433,8 +447,10 @@ __BODY__
   }
   $('#sheet-x').onclick = closeSheet; sheetBg.onclick = closeSheet; document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeSheet(); });
   $$('.unrev .row-close button').forEach(b => b.onclick = () => { const row = b.closest('.row-body').previousElementSibling; row.classList.remove('open'); row.scrollIntoView({block: 'center'}); });
-  // gut flags on unreviewed files
-  $$('.unrev button').forEach(b => b.onclick = () => {
+  // Gut flags — scoped to `button[data-file]`, the ⚑ controls. `.unrev button` also matched the
+  // row's "▲ Collapse …" button, and because this loop runs AFTER the collapse wiring it replaced
+  // that handler outright: pressing Collapse silently raised a gut flag and never collapsed.
+  $$('.unrev button[data-file]').forEach(b => b.onclick = () => {
     b.classList.toggle('on'); const on = b.classList.contains('on');
     event(on ? 'gut_flag' : 'undo', null, on ? {file: b.dataset.file} : {undo: 'gut_flag', file: b.dataset.file});
     toast(on ? 'Gut-flag raised — ask Claude to dig into ' + b.dataset.file : 'Gut-flag cleared');

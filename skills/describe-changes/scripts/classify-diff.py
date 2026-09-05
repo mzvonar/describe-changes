@@ -40,6 +40,19 @@ IMPORT_RE = re.compile(r"""^\s*(
     #include\s.*                                  # c/c++
 )\s*$""", re.X)
 COMMENT_RE = re.compile(r"^\s*(//|#|/\*|\*|\*/|--|<!--|;;|%|'''|\"\"\"|///|\"\"\"\s*$)")
+# A named specifier alone on a line inside a multi-line import block: `  Foo,` / `  type Bar,` /
+# `  Foo as Baz,`. Counted as import noise ONLY when the hunk is demonstrably inside an import
+# statement (see IMPORT_CONTEXT_RE) — on its own such a line is indistinguishable from an object
+# literal entry, an enum member or an array element, and folding those would hide real changes.
+# Without this, re-pointing an import at a barrel reads as substantive: the DELETED deep-path
+# `import { X } from "…/x"` lines match IMPORT_RE, but the ADDED `X,` inside the existing braces
+# does not, so the hunk is half import-rewrite and half "substantive" and never folds.
+SPECIFIER_RE = re.compile(r"^\s*(type\s+)?[A-Za-z_$][\w$]*(\s+as\s+[A-Za-z_$][\w$]*)?\s*,?\s*$")
+# Deliberately `import` ONLY, not `export {`. Both are brace-and-specifier blocks, but adding a
+# specifier to an EXPORT widens a module's public API — in this codebase a barrel is rule-bound
+# (`service/index.ts` may export only `AsUser` functions), so a new export line is exactly the kind
+# of thing a reviewer must see. An import moving to a different path changes nothing it can observe.
+IMPORT_CONTEXT_RE = re.compile(r"^\s*import\b")
 SYMBOL_RE = re.compile(r"""^\s*(?:export\s+)?(?:default\s+)?(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:static\s+)?
     (?:function\*?|def|fn|func|class|interface|type|enum|struct|trait|impl|module|object|
        (?:const|let|var|val)|(?:public|private|protected|internal)\s+(?:static\s+)?(?:[\w<>\[\],.?]+\s+)?)
@@ -142,7 +155,7 @@ def blocks_of(h):
     if cur is not None: blocks.append(cur)
     return blocks
 
-def classify_block(rem, add, ws_sensitive):
+def classify_block(rem, add, ws_sensitive, in_import=False):
     changed = rem + add
     if not changed: return "substantive"
     if all(not l.strip() for l in changed):
@@ -152,10 +165,26 @@ def classify_block(rem, add, ws_sensitive):
     if rem and add and norm_fmt("".join(rem)) == norm_fmt("".join(add)):
         return "format"
     nonblank = [l for l in changed if l.strip()]
-    # Mixed noise is still noise: every changed line must be an import OR a comment.
-    if nonblank and all(IMPORT_RE.match(l) or COMMENT_RE.match(l) for l in nonblank):
-        return "import-rewrite" if any(IMPORT_RE.match(l) for l in nonblank) else "comment-only"
+    # Mixed noise is still noise: every changed line must be an import OR a comment. Inside an
+    # import statement, a bare specifier counts too — that is what makes a barrel re-point fold.
+    def import_ish(l):
+        return bool(IMPORT_RE.match(l) or (in_import and SPECIFIER_RE.match(l)))
+
+    if nonblank and all(import_ish(l) or COMMENT_RE.match(l) for l in nonblank):
+        return "import-rewrite" if any(import_ish(l) for l in nonblank) else "comment-only"
     return "substantive"
+
+def hunk_in_import(h):
+    """Is this hunk inside an import statement? Used to let bare specifiers count as import noise.
+
+    Two independent signals, either sufficient: git's own context suffix on the `@@` header (it
+    names the enclosing construct — `@@ … @@ import {`), and an import-shaped line among the hunk's
+    OWN lines (context, added or removed). The header alone is a heuristic git can get wrong, and a
+    hunk that opens mid-block has no `import` line of its own, so neither is reliable by itself.
+    """
+    if IMPORT_CONTEXT_RE.search((getattr(h, "header", "") or "").split("@@")[-1]):
+        return True
+    return any(IMPORT_CONTEXT_RE.match(l[1:] if l[:1] in "+- " else l) for l in getattr(h, "lines", []))
 
 NOISE_ORDER = ["import-rewrite", "format", "whitespace", "comment-only"]
 
@@ -163,7 +192,9 @@ def classify_hunk(h, ws_sensitive):
     """Hunk category = substantive if ANY block is; else the most significant noise kind present.
     Also records h.blocks (per-block categories) so import rewrites inside a substantive hunk can
     still be attached to the rename they follow."""
-    h.blocks = [dict(b, category=classify_block(b["removed"], b["added"], ws_sensitive)) for b in blocks_of(h)]
+    in_import = hunk_in_import(h)
+    h.blocks = [dict(b, category=classify_block(b["removed"], b["added"], ws_sensitive, in_import))
+                for b in blocks_of(h)]
     cats = {b["category"] for b in h.blocks}
     if not cats or "substantive" in cats: return "substantive"
     return next(c for c in NOISE_ORDER if c in cats)
