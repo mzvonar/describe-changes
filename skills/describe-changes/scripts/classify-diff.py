@@ -58,6 +58,7 @@ SYMBOL_RE = re.compile(r"""^\s*(?:export\s+)?(?:default\s+)?(?:pub(?:\([^)]*\))?
        (?:const|let|var|val)|(?:public|private|protected|internal)\s+(?:static\s+)?(?:[\w<>\[\],.?]+\s+)?)
     \s+([A-Za-z_$][\w$]*)""", re.X)
 SPEC_RE = re.compile(r"""(['"])([^'"]+)\1""")
+UNRESOLVED_MODULE = "(module not named in the hunk)"
 
 def ext_of(path):
     base = os.path.basename(path)
@@ -144,15 +145,18 @@ def norm_fmt(s):
     return s
 
 def blocks_of(h):
-    """Split a hunk into change blocks: maximal runs of -/+ lines (a replace = one block)."""
+    """Split a hunk into change blocks: maximal runs of -/+ lines (a replace = one block).
+
+    `start`/`end` index back into `h.lines` so a block of bare specifiers can find the `from "…"`
+    on the CONTEXT line that closes its import statement — see `enclosing_module`."""
     blocks, cur = [], None
-    for l in h.lines:
+    for i, l in enumerate(h.lines):
         if l.startswith("-") or l.startswith("+"):
-            if cur is None: cur = {"removed": [], "added": []}
+            if cur is None: cur = {"removed": [], "added": [], "start": i}
             cur["removed" if l.startswith("-") else "added"].append(l[1:])
         elif cur is not None:
-            blocks.append(cur); cur = None
-    if cur is not None: blocks.append(cur)
+            cur["end"] = i; blocks.append(cur); cur = None
+    if cur is not None: cur["end"] = len(h.lines); blocks.append(cur)
     return blocks
 
 def classify_block(rem, add, ws_sensitive, in_import=False):
@@ -228,6 +232,33 @@ def import_specs(lines):
         for m in SPEC_RE.finditer(l): specs.append(m.group(2))
     return specs
 
+FROM_RE = re.compile(r"""\bfrom\s+(['"])([^'"]+)\1""")
+
+def enclosing_module(h, block):
+    """The module a block of BARE specifiers belongs to.
+
+    `import_specs` reads quoted module paths off the changed lines. A block that only adds
+    `  Foo,` inside an existing `import { … } from "@/x"` has none — the path sits on the context
+    line that closes the statement — so such a block used to look like "no module", which the fold
+    then read as "an import was removed". It is the opposite: an import was ADDED. Scan forward to
+    the first `from "…"`, stopping if a new `import` statement starts first (then the block was not
+    inside one after all)."""
+    lines = getattr(h, "lines", [])
+    for i in range(block.get("end", 0), len(lines)):
+        raw = lines[i]; l = raw[1:] if raw[:1] in "+- " else raw
+        if IMPORT_CONTEXT_RE.match(l): break
+        m = FROM_RE.search(l)
+        if m: return m.group(2)
+    return None
+
+def block_modules(h, block, side):
+    """Module paths the block imports FROM on `side` ("added"/"removed"), bare specifiers included."""
+    mods = list(dict.fromkeys(import_specs(block[side])))
+    if not mods and any(SPECIFIER_RE.match(l) for l in block[side] if l.strip()):
+        enc = enclosing_module(h, block)
+        if enc: mods = [enc]
+    return mods
+
 def content_lines(lines):
     return {l.strip() for l in lines if len(l.strip()) > 12 and not COMMENT_RE.match(l)}
 
@@ -291,9 +322,16 @@ def main():
                 specs = import_specs(b["added"]) + import_specs(b["removed"])
                 targets = [rename_bases[k] for k in rename_bases if any(k in sp for sp in specs)]
                 partial = h.category == "substantive"
-                added_specs = list(dict.fromkeys(import_specs(b["added"]))); removed_specs = list(dict.fromkeys(import_specs(b["removed"])))
+                added_specs = block_modules(h, b, "added"); removed_specs = block_modules(h, b, "removed")
+                specs = specs or added_specs + removed_specs
+                targets = targets or [rename_bases[k] for k in rename_bases if any(k in sp for sp in specs)]
+                what = " / ".join(added_specs) or (("dropped: " + " / ".join(removed_specs)) if removed_specs else "")
+                # Direction is known even when the module is not: a hunk can add a specifier whose
+                # `} from "…"` sits past the last context line, and "which way" still matters more
+                # to a reviewer than "from where".
                 item = {"file": f.path, "hunk_ids": [h.id], "partial": partial, "added": added_specs, "removed": removed_specs,
-                        "detail": (" / ".join(added_specs) or h.header) + (" (inside a substantive hunk)" if partial else "")}
+                        "dir_added": any(l.strip() for l in b["added"]), "dir_removed": any(l.strip() for l in b["removed"]),
+                        "detail": (what or h.header) + (" (inside a substantive hunk)" if partial else "")}
                 parents = [r for r in folds["rename"] if r["file"] in targets]
                 for r in parents: r["followers"].append(item)
                 if not parents and not partial: folds["import-rewrite"].append(item)
@@ -368,17 +406,40 @@ def main():
                 symbol_moves.append({"name": name, "from": src, "to": dst})
 
     if folds.get("import-rewrite"):
-        by_mod = defaultdict(lambda: {"files": [], "hunk_ids": []})
+        # Group by module, and keep the DIRECTION per file: a group that only added the import must
+        # not be described as a removal (it was, for every barrel re-point — the added lines carry
+        # no quoted path, so the module was unknown and the item fell into an "imports removed"
+        # bucket while the diff showed additions only).
+        by_mod = defaultdict(lambda: {"files": [], "hunk_ids": [], "added_in": [], "removed_in": []})
         for it in folds["import-rewrite"]:
-            for spec in it.get("added") or ["(imports removed)"]:
-                g = by_mod[spec]
-                if it["file"] not in g["files"]: g["files"].append(it["file"])
+            add, rem = it.get("added") or [], it.get("removed") or []
+            named = list(dict.fromkeys(add + rem))
+            # Unnamed modules still split by direction — one "added and dropped" bucket would hide
+            # which files did which, and the module name is the only thing missing, not the fact.
+            unnamed_key = UNRESOLVED_MODULE + ("+" if it.get("dir_added") else "") + ("-" if it.get("dir_removed") else "")
+            for mod in named or [unnamed_key]:
+                g = by_mod[mod]
+                hits = (("files", True), ("added_in", mod in add if named else it.get("dir_added")),
+                        ("removed_in", mod in rem if named else it.get("dir_removed")))
+                for key, hit in hits:
+                    if hit and it["file"] not in g[key]: g[key].append(it["file"])
                 g["hunk_ids"] += it["hunk_ids"]
-        folds["import-rewrite"] = [{"file": mod, "module": mod, "files": sorted(v["files"]), "hunk_ids": v["hunk_ids"],
-                                    "detail": (f"unused imports dropped in {len(v['files'])} file{'s' if len(v['files']) != 1 else ''}: " if mod == "(imports removed)" else f"{mod} ← now imported in {len(v['files'])} file{'s' if len(v['files']) != 1 else ''}: ") + ", ".join(sorted(v["files"]))}
+        def verb(mod, v):
+            n = len(v["files"]); files = f"{n} file{'s' if n != 1 else ''}"
+            add, rem = bool(v["added_in"]), bool(v["removed_in"])
+            if mod.startswith(UNRESOLVED_MODULE):               # direction known, module named outside the hunk
+                what = "imports added" if add and not rem else "imports dropped" if rem and not add else "imports added and dropped"
+                return f"{what} in {files} (the module is named outside the hunk)"
+            if add and not rem: return f"now imported in {files}"
+            if rem and not add: return f"no longer imported in {files}"
+            return f"imports changed in {files} (added in {len(v['added_in'])}, dropped in {len(v['removed_in'])})"
+        folds["import-rewrite"] = [{"file": mod, "module": "" if mod.startswith(UNRESOLVED_MODULE) else mod, "files": sorted(v["files"]),
+                                    "hunk_ids": list(dict.fromkeys(v["hunk_ids"])), "verb": verb(mod, v),
+                                    "added_in": sorted(v["added_in"]), "removed_in": sorted(v["removed_in"]),
+                                    "detail": (f"{mod} ← " if not mod.startswith(UNRESOLVED_MODULE) else "") + verb(mod, v) + ": " + ", ".join(sorted(v["files"]))}
                                    for mod, v in sorted(by_mod.items(), key=lambda kv: -len(kv[1]["files"]))]
     fold_titles = {"rename": "Renamed files (imports updated to match)", "move": "Moved files", "split": "Files split",
-                   "import-rewrite": "Import-only changes (module ← files that now import it)", "whitespace": "Whitespace-only hunks",
+                   "import-rewrite": "Import-only changes (module ← the files whose imports of it changed)", "whitespace": "Whitespace-only hunks",
                    "format": "Formatting-only hunks", "comment-only": "Comment-only hunks",
                    "lockfile": "Lockfiles", "generated": "Generated / build output", "snapshot": "Test snapshots",
                    "vendored": "Vendored code", "binary": "Binary files"}

@@ -133,8 +133,9 @@ the exact shape in `reference/report-schema.md`. The non-negotiables:
   copy-as-curl, a Postman collection and an inline send against a base URL they choose. Skip
   `request` for a server action or RPC that has no addressable endpoint — a card that cannot be run
   is still a good card, and a fake endpoint is worse than none.
-- **`folded`:** copy `diff-model.json` → `folds` verbatim (you may add a one-line `title` tweak; never
-  invent folds). **`unreviewed_notes`:** one clause per substantive-but-unflagged file saying why it
+- **`folded`:** copy `diff-model.json` → `folds` verbatim; never invent folds, never re-word them.
+  The HTML renders the model's folds, not this copy (a copy can only go stale), so it exists for the
+  chat view and for exports that ship without a model. **`unreviewed_notes`:** one clause per substantive-but-unflagged file saying why it
   didn't make the cut (the honest "I looked, nothing to ask" list).
 - Be concrete: `file`, `lines` (new-side), `hunks: ["F3H2"]` so the renderer pulls the code for free.
 

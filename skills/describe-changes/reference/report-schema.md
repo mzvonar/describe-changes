@@ -90,7 +90,7 @@ Keys marked ● are required.
     }
   ],
 
-  "folded": [ /* copy diff-model.json → folds verbatim */ ],          // ●
+  "folded": [ /* copy diff-model.json → folds verbatim; the HTML renders the MODEL's copy */ ],  // ●
   "unreviewed_notes": {                                              // substantive files with no finding: why
     "src/pwa/components/StepCard.tsx": "prop pass-through only; typed end to end"
   }

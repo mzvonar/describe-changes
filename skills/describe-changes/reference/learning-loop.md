@@ -6,6 +6,7 @@ The skill learns from three channels, all normalised into one append-only event 
 | Channel | Event types | Captured by |
 |---|---|---|
 | HTML report UI (phone/desktop) | `more`, `less`, `noise`, `checked`, `note`, `gut_flag`, `undo`, `comment` (select text → Ask; carries selection + context + section/finding) | `serve.py` (`POST /feedback` → `feedback.jsonl`), or Copy JSON → paste into chat when opened as a file |
+| "How to check" cards | `check_verified` / `undo`, `check_note` ("didn't work" text), `check_run` (inline API send + HTTP `status`) — each carrying the check's `id`, `feature` and `surface` | same as above; read per-report with `feedback.py notes`, across reports with `digest` |
 | Chat follow-ups | `question` (+ which finding, + what code answered it) | the skill, step 7 |
 | Page comments answered | `question` with `source=comment`, `selection`, `section`, `improvement` — what the report should have said up front | `feedback.py answer` (answers live in `answers.jsonl`, rendered into the page's Conversation section) |
 | Q&A outcomes | `outcome` with `kind = missed / false_positive / confirmed / severity_changed` | the skill, step 7 |
@@ -41,9 +42,11 @@ becomes the standard, add a second backend `type` in `cmd_push` — the event sh
    shared store to a local `lessons.jsonl` first).
 2. Read the digest's sections in order: **severity calibration** (which `severity/tags` combos humans
    demote or call noise → tighten rules in `analysis-guide.md` §2), **gut-flags** (file types the
-   analysis is blind to → add a signal), **questions** (what the report should have answered up
-   front → add to the finding shape, phases, or map rules), **outcomes** (missed findings → new
-   signal; false positives → budget discipline).
+   analysis is blind to → add a signal), **how-to-check results** (a check the reader marked as not
+   working is a defect in the *report* — wrong route, missing precondition, an expectation the code
+   does not meet → tighten the `how_to_check` rules), **questions** (what the report should have
+   answered up front → add to the finding shape, phases, or map rules), **outcomes** (missed
+   findings → new signal; false positives → budget discipline).
 3. Edit `reference/analysis-guide.md` / `SKILL.md`, bump `VERSION`, commit in the describe-changes repo,
    re-sync consumers with `sync-skill.sh`. Lessons from the next runs will carry the new version, so
    you can see whether the calibration moved.

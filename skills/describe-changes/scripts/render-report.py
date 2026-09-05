@@ -272,7 +272,11 @@ def fold_card(g, known=None, hunks=None):
             sub = ('<details class="more"><summary>show files</summary><ul>'
                    + "".join(f'<li>{fold_ref(x, it.get("hunk_ids"), hunks or {})}</li>' for x in it["files"])
                    + "</ul></details>")
-            n = len(it["files"]); lab = f'unused imports dropped in {n} file{"s" if n != 1 else ""}' if it["module"] == "(imports removed)" else f'{E(it["module"])} <span style="color:var(--fg3)">← now imported in {n} file{"s" if n != 1 else ""}</span>'
+            # Direction comes from the model — re-deriving it here is how the page once said
+            # "unused imports dropped" over a fold whose files only ADDED imports.
+            n = len(it["files"])
+            verb = it.get("verb") or f'imports changed in {n} file{"s" if n != 1 else ""}'
+            lab = f'{E(it["module"])} <span style="color:var(--fg3)">← {E(verb)}</span>' if it.get("module") else E(verb)
             items.append(f'<li>{lab}{sub}</li>'); continue
         if it.get("targets"):
             sub = "<ul>" + "".join(f'<li>→ {fpath(t["path"], known)} ({int(t["overlap"]*100)}% of its lines came from the source)</li>' for t in it["targets"]) + "</ul>"
@@ -403,7 +407,10 @@ def main():
         b.append('<script type="application/json" id="postman-store">'
                  + json.dumps(postman_collection(checks, f'{meta.get("repo", "change")} · {meta.get("branch", "")}'.strip(" ·"))).replace("</", "<\\/") + "</script>")
 
-    folded = report.get("folded") or model["folds"]
+    # The MODEL wins over `report.folded`. That field is a verbatim copy the analyst makes for
+    # chat/export consumers, so when the two disagree the copy is the stale one — a re-render after
+    # a classifier fix kept showing the old, wrong fold labels because the copy was preferred.
+    folded = model.get("folds") or report.get("folded") or []
 
     # Conversation: comments (feedback.jsonl, type=comment) + answers (answers.jsonl)
     def read_jsonl(name):

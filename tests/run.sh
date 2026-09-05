@@ -9,7 +9,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; S="$HERE/../skills/describ
 T="${KEEP_T:-$(mktemp -d)}"; [ -n "${KEEP_T:-}" ] || trap 'rm -rf "$T"' EXIT
 export DESCRIBE_CHANGES_HOME="$T/home"
 fail() { echo "FAIL: $*" >&2; exit 1; }
-cd "$T" && git init -q -b main . && git config user.email t@t && git config user.name t
+# Isolation guard, and it is not paranoia: this script `git init`s, rewrites .gitignore, writes
+# fixture sources and commits. A KEEP_T that does not exist made `cd "$T"` a no-op once and the
+# fixture landed in the caller's real repo. Never trust set -e to catch a bad cd — check here.
+[ -n "$T" ] || { echo "FATAL: empty scratch dir" >&2; exit 1; }
+mkdir -p "$T" || { echo "FATAL: cannot create scratch dir '$T'" >&2; exit 1; }
+[ -z "$(ls -A "$T")" ] || { echo "FATAL: scratch dir '$T' is not empty — remove it or unset KEEP_T" >&2; exit 1; }
+cd "$T" || { echo "FATAL: cannot enter scratch dir '$T'" >&2; exit 1; }
+[ "$(pwd -P)" = "$(cd "$T" && pwd -P)" ] || { echo "FATAL: not in the scratch dir" >&2; exit 1; }
+git rev-parse --show-toplevel >/dev/null 2>&1 && { echo "FATAL: '$T' is inside an existing git repo — refusing to write fixtures into it" >&2; exit 1; }
+git init -q -b main . && git config user.email t@t && git config user.name t
 printf 'home/\nget.html\nserve.log\n' > .gitignore
 
 mkdir -p src/util src/api
@@ -37,6 +46,36 @@ export function saveUser(name: string) {
 export function format(x: { a: number, b: number }) {
     return [x.a,x.b];
 }
+F
+# Two import-only files with OPPOSITE directions, so the fold has to tell them apart: one gains a
+# bare specifier inside an existing block (no quoted module path on the changed line), one drops a
+# whole import line.
+cat > src/api/barrel.ts <<'F'
+import {
+  alpha,
+  slugify,
+} from '../util/barrel';
+export function run(n: string) { return alpha(1) + slugify(n); }
+F
+cat > src/api/legacy.ts <<'F'
+import { zeta } from '../util/big';
+import { gamma } from '../util/flags';
+export function legacy(c: boolean) { return gamma(c); }
+F
+# An import block long enough that the `} from "…"` falls outside the hunk's context: the module
+# cannot be named, but the direction still can.
+cat > src/api/wide.ts <<'F'
+import {
+  a1,
+  a2,
+  a3,
+  a4,
+  a5,
+  a6,
+  a7,
+  a8,
+} from '../util/wide';
+export function wide() { return a1 + a8; }
 F
 printf 'def f(x):\n    if x:\n        return 1\n    return 2\n' > script.py
 printf '{"lockfileVersion": 3}\n' > package-lock.json
@@ -70,6 +109,32 @@ export function format(x: { a: number; b: number }) {
   return [x.a, x.b];
 }
 F
+cat > src/api/barrel.ts <<'F'
+import {
+  alpha,
+  beta,
+  slugify,
+} from '../util/barrel';
+export function run(n: string) { return alpha(1) + slugify(n); }
+F
+cat > src/api/legacy.ts <<'F'
+import { gamma } from '../util/flags';
+export function legacy(c: boolean) { return gamma(c); }
+F
+cat > src/api/wide.ts <<'F'
+import {
+  a0,
+  a1,
+  a2,
+  a3,
+  a4,
+  a5,
+  a6,
+  a7,
+  a8,
+} from '../util/wide';
+export function wide() { return a1 + a8; }
+F
 printf 'def f(x):\n    if x:\n        return 1\n        return 3\n    return 2\n' > script.py
 printf '{"lockfileVersion": 3, "x": 1}\n' > package-lock.json
 printf '// new note: totals ignore NaN\nexport function total(n: number[]) {\n  return n.reduce((a, b) => a + b, 0);\n}\n' > src/util/notes.ts
@@ -94,6 +159,21 @@ cats = {h["category"] for h in files["src/api/users.ts"]["hunks"]}
 assert "substantive" in cats, cats
 assert files["script.py"]["whitespace_sensitive"] and files["script.py"]["substantive_hunks"] == 1
 assert m["stats"]["noise_pct"] > 30, m["stats"]
+# Import folds must state the DIRECTION they actually observed. A bare specifier added inside an
+# existing `import { … }` block names no module on the changed line; that used to bucket it as
+# "unused imports dropped in N files" over a diff of pure additions.
+imports = {it["module"]: it for it in folds["import-rewrite"]["items"]}
+add = imports.get("../util/barrel") or fail(f"barrel import not grouped by its module: {list(imports)}")
+assert "now imported in 1 file" == add["verb"], add
+assert add["added_in"] == ["src/api/barrel.ts"] and add["removed_in"] == [], add
+drop = imports.get("../util/big") or fail(f"dropped import not grouped by its module: {list(imports)}")
+assert "no longer imported in 1 file" == drop["verb"], drop
+assert drop["removed_in"] == ["src/api/legacy.ts"] and drop["added_in"] == [], drop
+assert not any("dropped" in it["detail"] and "src/api/barrel.ts" in it["detail"] for it in folds["import-rewrite"]["items"]), folds["import-rewrite"]
+# Module outside the hunk: unnamed, but never mis-signed.
+unnamed = [it for it in folds["import-rewrite"]["items"] if not it["module"]]
+assert len(unnamed) == 1 and unnamed[0]["files"] == ["src/api/wide.ts"], unnamed
+assert unnamed[0]["verb"].startswith("imports added in 1 file"), unnamed[0]
 sub = open(os.path.join(sys.argv[1], "substantive.diff")).read()
 assert "db.upsert" in sub and "big-a.ts" not in sub.split("diff --git")[0]
 assert "package-lock" not in sub
@@ -209,6 +289,27 @@ ok = bool(refs) and not missing and all(store.values())
 print("fold hunks viewable" if ok else f"FAIL refs={refs[:3]} missing={missing}")
 sys.exit(0 if ok else 1)
 PY
+# …and the page must print the model's direction, not re-derive one (it had its own copy of the
+# label logic, so a fold of pure additions read "unused imports dropped").
+grep -q '← now imported in 1 file' "$OUT/index.html" || fail "import fold: added direction not rendered"
+# …and it must come from the MODEL, not from report.json's copy of it — a stale copy is how the
+# page kept rendering old fold labels after the classifier was fixed.
+export S
+python3 - "$OUT" <<'PY' || fail "stale report.folded won over the live model"
+import json, os, subprocess, sys
+d = sys.argv[1]; p = os.path.join(d, "report.json"); r = json.load(open(p))
+orig = open(p).read()
+r["folded"] = [{"kind": "import-rewrite", "title": "STALE COPY", "count": 1,
+                "items": [{"file": "x", "module": "x", "files": ["x"], "hunk_ids": [], "verb": "STALE VERB", "detail": "x"}]}]
+open(p, "w").write(json.dumps(r))
+subprocess.run([sys.executable, os.environ["S"] + "/render-report.py", "--dir", d], check=True, capture_output=True)
+html = open(os.path.join(d, "index.html")).read()
+open(p, "w").write(orig)
+sys.exit(0 if "STALE VERB" not in html and "now imported in 1 file" in html else 1)
+PY
+python3 "$S/render-report.py" --dir "$OUT" >/dev/null   # restore the real page for later assertions
+grep -q '← no longer imported in 1 file' "$OUT/index.html" || fail "import fold: removed direction not rendered"
+! grep -q 'unused imports dropped' "$OUT/index.html" || fail "import fold: stale removal label rendered"
 # The gut-flag wiring must not swallow the row's Collapse button (it did: `.unrev button` matched
 # both, and the later assignment replaced the collapse handler outright).
 grep -q "\$\$('.unrev button\[data-file\]')" "$OUT/index.html" || fail "gut-flag selector is not scoped to the flag buttons"
@@ -264,6 +365,17 @@ python3 "$S/feedback.py" notes --dir "$OUT" | grep -q '401 instead of 200' || fa
 python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'intended, ship it' || fail "notes: finding note not reported"
 printf '%s\n' '{"ts":"2026-01-01T00:00:07Z","type":"undo","undo":"check_verified","check":"V1"}' >> "$OUT/feedback.jsonl"
 python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'un-marked again: V1' || fail "notes: untick not reported"
+# digest: the same check events reach the MAINTAINER's view, with the check's identity attached.
+# They used to land in the generic event mix only — collected, never read.
+printf '%s\n' '{"ts":"2026-01-01T00:00:08Z","type":"check_run","check":"V2","status":401}' >> "$OUT/feedback.jsonl"
+python3 "$S/feedback.py" ingest "$OUT/feedback.jsonl" --dir "$OUT" >/dev/null
+python3 "$S/feedback.py" digest > "$DESCRIBE_CHANGES_HOME/digest.txt"
+grep -q 'How-to-check results' "$DESCRIBE_CHANGES_HOME/digest.txt" || fail "digest: no how-to-check section"
+grep -q "1 reported not working" "$DESCRIBE_CHANGES_HOME/digest.txt" || fail "digest: failing check not counted"
+grep -q "V2 · Save user endpoint (api) — ✗ didn't work" "$DESCRIBE_CHANGES_HOME/digest.txt" || fail "digest: check identity/verdict missing"
+grep -q '401 instead of 200' "$DESCRIBE_CHANGES_HOME/digest.txt" || fail "digest: check note text missing"
+grep -q 'sent: 401×1' "$DESCRIBE_CHANGES_HOME/digest.txt" || fail "digest: inline-send status missing"
+grep -q 'V1 · Saving a user persists it (ui) — un-ticked after verifying' "$DESCRIBE_CHANGES_HOME/digest.txt" || fail "digest: untick not carried"
 # scope: branch mode includes commits + uncommitted; --check detects a moved tree; --committed-only excludes
 git commit -qm "wip" && git checkout -qb feat/x && echo 'export const z = 1' > src/z.ts && git add src/z.ts && echo 'export const y = 2' > src/y.ts
 OUT2="$(bash "$S/collect-diff.sh" --base main | tail -1 | sed 's/^OUT=//')"

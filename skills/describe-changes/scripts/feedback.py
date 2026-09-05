@@ -13,7 +13,8 @@ Subcommands
   outcome --dir <report-dir> --kind <missed|false_positive|confirmed> --finding <id|new> --text "..."
                                                                log what the Q&A revealed (a missed finding etc.)
   push    [--since ISO]                                        send unsent events to the configured shared backend
-  digest  [--since ISO] [--repo X]                             maintainer view: cluster lessons by kind/tag/severity
+  digest  [--since ISO] [--repo X]                             maintainer view: severity calibration, gut-flags,
+                                                               how-to-check results, questions, outcomes, notes
   export  [--since ISO]                                        dump raw JSON to stdout
 Every event carries: ts, type, repo, range, finding (id/severity/tags/title), skill_version, user.
 """
@@ -36,13 +37,15 @@ def skill_version():
                 if not l.startswith("#") and l.strip(): return l.strip()
     return "dev"
 def load_ctx(d):
-    ctx = {"repo": "", "range": "", "findings": {}}
+    ctx = {"repo": "", "range": "", "findings": {}, "checks": {}}
     try:
         m = json.load(open(os.path.join(d, "meta.json"))); ctx["repo"], ctx["range"] = m.get("repo", ""), m.get("range_label", "")
     except Exception: pass
     try:
         r = json.load(open(os.path.join(d, "report.json")))
         ctx["findings"] = {f["id"]: {"id": f["id"], "severity": f["severity"], "tags": f.get("tags", []), "title": f["title"], "file": f["file"]} for f in r["findings"]}
+        ctx["checks"] = {c["id"]: {"id": c["id"], "feature": c.get("feature", ""), "surface": c.get("surface", "ui"),
+                                   "where": c.get("where", ""), "covered_by": c.get("covered_by")} for c in r.get("how_to_check", [])}
         ctx["repo"] = ctx["repo"] or r.get("repo", "")
     except Exception: pass
     return ctx
@@ -82,8 +85,11 @@ def cmd_ingest(a):
         key = (ev.get("ts"), ev.get("type"), fid(ev.get("finding")), ev.get("file"))
         if key in seen: continue
         f = ctx["findings"].get(ev.get("finding") or "")
+        c = ctx["checks"].get(ev.get("check") or "")
         out.append(base(ctx, ev.get("type", "unknown"), ts=ev.get("ts") or now(), source="ui",
                         finding=f or ({"id": ev.get("finding")} if ev.get("finding") else None),
+                        check=c or ({"id": ev.get("check")} if ev.get("check") else None),
+                        status=ev.get("status"),
                         file=ev.get("file"), text=ev.get("text"), undo=ev.get("undo")))
     append(out)
     kinds = collections.Counter(e["type"] for e in out)
@@ -191,6 +197,43 @@ def cmd_push(a):
         for e in allev: fh.write(json.dumps(e) + "\n")
     print(f"pushed {len(evs)} events to {c['url']}")
 
+CHECK_TYPES = ("check_verified", "check_note", "check_run")
+
+def _check_digest(evs):
+    """"How to check" results: which checks the reader ran, which failed, and what they said.
+
+    The generic event mix only counts these, which is the same silent-collection failure `notes`
+    fixed for card notes — a reader who says a step doesn't work is reporting a defect in the
+    report itself, and that is the loudest signal the loop gets.
+    """
+    rows = [e for e in evs if e["type"] in CHECK_TYPES or (e["type"] == "undo" and e.get("undo") == "check_verified")]
+    if not rows: return
+    agg = {}
+    for e in sorted(rows, key=lambda e: e.get("ts") or ""):
+        c = e.get("check") or {}
+        cid = c.get("id") if isinstance(c, dict) else c
+        if not cid: continue
+        r = agg.setdefault((e.get("repo") or "", cid),
+                           {"id": cid, "repo": e.get("repo") or "", "label": "", "verified": False,
+                            "unticked": False, "notes": [], "runs": collections.Counter()})
+        if isinstance(c, dict) and c.get("feature"):
+            r["label"] = f"{c['feature']} ({c.get('surface') or 'ui'})"
+        if e["type"] == "check_verified": r["verified"], r["unticked"] = True, False
+        elif e["type"] == "undo": r["verified"], r["unticked"] = False, True
+        elif e["type"] == "check_note" and e.get("text"): r["notes"].append(e["text"])
+        elif e["type"] == "check_run": r["runs"][str(e.get("status") or "?")] += 1
+    if not agg: return
+    def failing(r): return bool(r["notes"]) or any(not s.startswith("2") for s in r["runs"])
+    bad = [r for r in agg.values() if failing(r)]
+    print(f"\n## How-to-check results ({len(agg)} checks touched, {len(bad)} reported not working)"
+          " — a failing check is a defect in the report, not just in the code")
+    for r in sorted(agg.values(), key=lambda r: (not failing(r), not r["unticked"], r["id"])):
+        mark = "✗ didn't work" if failing(r) else ("✓ verified" if r["verified"] else "un-ticked after verifying" if r["unticked"] else "touched")
+        where = f"[{r['repo']}] " if r["repo"] else ""
+        print(f"- {where}{r['id']}{(' · ' + r['label']) if r['label'] else ''} — {mark}")
+        for t in r["notes"][-3:]: print(f"    “{t}”")
+        if r["runs"]: print("    sent: " + ", ".join(f"{k}×{v}" for k, v in r["runs"].most_common()))
+
 def cmd_digest(a):
     evs = [e for e in read_all(a.since) if not a.repo or e.get("repo") == a.repo]
     if not evs: print("no lessons yet"); return
@@ -208,6 +251,7 @@ def cmd_digest(a):
     if gut:
         print(f"\n## Gut-flags on unflagged files ({len(gut)}) — candidate blind spots")
         for k, v in collections.Counter(os.path.splitext(e.get('file') or '')[1] or e.get('file') for e in gut).most_common(10): print(f"- {k}: {v}")
+    _check_digest(evs)
     q = [e for e in evs if e["type"] == "question"]
     if q:
         print(f"\n## Questions asked ({len(q)}) — what the report failed to answer up front")
