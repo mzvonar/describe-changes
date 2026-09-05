@@ -77,7 +77,17 @@ details.more summary{cursor:pointer;color:var(--fg2);font-size:.85rem;padding:.3
 .conf li details[open] summary::after{content:" ⌃"}
 .conf li .d{margin:.35rem 0 .55rem;font-size:.85rem;color:var(--fg3);border-left:2px solid var(--line2);padding-left:.6rem}
 .files{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.5rem}
-.files span{font-family:var(--mono);font-size:.7rem;padding:.15rem .45rem;background:var(--bg2);border:1px solid var(--line);border-radius:5px;color:var(--fg2);word-break:break-all}
+.files span,button.fpath{font-family:var(--mono);font-size:.7rem;padding:.15rem .45rem;background:var(--bg2);border:1px solid var(--line);border-radius:5px;color:var(--fg2);word-break:break-all}
+/* A file path that is in the diff opens it; one that is not renders as a plain span instead, so a
+   control never does nothing when clicked. The FULL path shows, never the basename — sibling
+   features routinely ship two `actions.ts` or two `membership.ts`, indistinguishable by basename.
+   Styled globally rather than under `.files`: these appear in phases, the uncommitted list and the
+   folded-noise lists alike, and all three should look and behave the same. */
+button.fpath{cursor:pointer;text-align:left;line-height:1.45;-webkit-tap-highlight-color:transparent}
+button.fpath::before{content:"⟨/⟩ ";color:var(--fg3)}
+button.fpath:hover{border-color:var(--line2);color:var(--fg)}
+button.fpath:active{border-color:var(--info)}
+.fold li button.fpath,.fold li span{margin:.1rem 0}
 .legend{display:flex;flex-wrap:wrap;gap:.6rem;font-size:.75rem;color:var(--fg2);margin:.5rem 0}
 .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:.3rem;vertical-align:-2px}
 .map{background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);padding:.5rem;overflow:auto;-webkit-overflow-scrolling:touch}
@@ -260,7 +270,10 @@ __BODY__
   const sheet = $('#sheet'), sheetBg = $('#sheet-bg');
   const openSheet = f => { $('#sheet-t').textContent = f + (STORE[f] ? ' · ' + STORE[f].status : ''); $('#sheet-b').innerHTML = codeFor(f); sheet.classList.add('show'); sheetBg.classList.add('show'); };
   const closeSheet = () => { sheet.classList.remove('show'); sheetBg.classList.remove('show'); };
-  document.addEventListener('click', ev => { const c = ev.target.closest('.fchip'); if (c) { ev.preventDefault(); ev.stopPropagation(); openSheet(c.dataset.open); } });
+  // Delegated on [data-open], not on a class: every file reference anywhere in the report — view
+  // chips, phase paths, the uncommitted list — opens that file's changes, and anything added later
+  // inherits it by carrying the attribute.
+  document.addEventListener('click', ev => { const c = ev.target.closest('[data-open]'); if (c) { ev.preventDefault(); ev.stopPropagation(); openSheet(c.dataset.open); } });
   $('#sheet-x').onclick = closeSheet; sheetBg.onclick = closeSheet; document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeSheet(); });
   $$('.unrev .row-close button').forEach(b => b.onclick = () => { const row = b.closest('.row-body').previousElementSibling; row.classList.remove('open'); row.scrollIntoView({block: 'center'}); });
   // gut flags on unreviewed files

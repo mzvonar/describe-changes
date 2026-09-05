@@ -139,6 +139,18 @@ grep -q '<summary>Never ran the persistence path' "$OUT/index.html" || fail "con
 grep -q 'upsert&#x27;s overwrite semantics are unverified' "$OUT/index.html" || fail "confession detail not rendered"
 grep -q 'class="adoption"' "$OUT/index.html" && grep -q 'class="flow"' "$OUT/index.html" && grep -q 'class="screen"' "$OUT/index.html" || fail "views missing"
 grep -q 'id="file-store"' "$OUT/index.html" && grep -q 'data-open="src/api/users.ts"' "$OUT/index.html" || fail "file store / chips missing"
+# Every listed file opens its own diff (1.1.0). Phase lists were plain text before, which is the
+# one place a reader is handed filenames and then given no way to look at them.
+grep -q 'class="fpath" data-open="src/util/text.ts"' "$OUT/index.html" || fail "phase file paths are not clickable"
+grep -q 'class="fpath" data-open="src/util/big-a.ts"' "$OUT/index.html" || fail "folded-noise file paths are not clickable"
+python3 - "$OUT/index.html" <<'PY' || fail "clickable paths are not all backed by the file store"
+import json, re, sys
+html = open(sys.argv[1]).read()
+store = json.loads(re.search(r'<script type="application/json" id="file-store">(.*?)</script>', html, re.S).group(1).replace("<\\/", "</"))
+missing = sorted({p for p in re.findall(r'data-open="([^"]+)"', html)} - set(store))
+print("FAIL, dead controls:", missing) if missing else print("all data-open paths resolve")
+sys.exit(1 if missing else 0)
+PY
 grep -q 'Renamed files' "$OUT/index.html" || fail "fold card missing"
 grep -q 'row fold-row' "$OUT/index.html" && grep -A3 'row fold-row' "$OUT/index.html" | grep -q 'row-body' || fail "everything-else rows not expandable"
 

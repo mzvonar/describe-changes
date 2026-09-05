@@ -134,6 +134,19 @@ def fchip(node):
     if not f: return ""
     return f'<button class="fchip" data-open="{E(f)}" title="{E(f)}">⟨/⟩ {E(os.path.basename(f))}</button>'
 
+def fpath(path, known=None):
+    """A file path listed in prose (phases, uncommitted set) — clickable to its diff.
+
+    Shows the FULL path, unlike `fchip`: these appear in lists where sibling features routinely
+    contribute two `actions.ts` or two `membership.ts`, and a basename alone cannot tell them apart.
+
+    A path the diff does not contain renders inert instead of opening an empty sheet — a control
+    that does nothing when clicked teaches the reader that none of them work.
+    """
+    if known is not None and path not in known:
+        return f"<span>{E(path)}</span>"
+    return f'<button class="fpath" data-open="{E(path)}" title="Show the changes in {E(path)}">{E(path)}</button>'
+
 def pill(change):
     return f'<span class="chg chg-{E(change)}">{E(CH_LABEL.get(change, change))}</span>' if change and change != "unchanged" else ""
 
@@ -166,19 +179,24 @@ def view_adoption(v):
 
 VIEWS = {"screen": view_screen, "flow": view_flow, "adoption": view_adoption}
 
-def fold_card(g):
+def fold_card(g, known=None):
+    # Folded files stay openable. The reader is told to skip this section, which is exactly why the
+    # escape hatch matters: the one failure folding can cause is hiding a real change inside a
+    # "rename", and a reviewer who suspects that must be able to check without leaving the page.
     items = []
     for it in g["items"]:
         sub = ""
         if it.get("followers"):
-            sub = "<ul>" + "".join(f'<li>{E(x["file"])} — {E(x["detail"])}</li>' for x in it["followers"]) + "</ul>"
+            sub = "<ul>" + "".join(f'<li>{fpath(x["file"], known)} — {E(x["detail"])}</li>' for x in it["followers"]) + "</ul>"
         if it.get("files"):
-            sub = '<details class="more"><summary>show files</summary><ul>' + "".join(f'<li>{E(x)}</li>' for x in it["files"]) + "</ul></details>"
+            sub = '<details class="more"><summary>show files</summary><ul>' + "".join(f'<li>{fpath(x, known)}</li>' for x in it["files"]) + "</ul></details>"
             n = len(it["files"]); lab = f'unused imports dropped in {n} file{"s" if n != 1 else ""}' if it["module"] == "(imports removed)" else f'{E(it["module"])} <span style="color:var(--fg3)">← now imported in {n} file{"s" if n != 1 else ""}</span>'
             items.append(f'<li>{lab}{sub}</li>'); continue
         if it.get("targets"):
-            sub = "<ul>" + "".join(f'<li>→ {E(t["path"])} ({int(t["overlap"]*100)}% of its lines came from the source)</li>' for t in it["targets"]) + "</ul>"
-        items.append(f'<li>{E(it.get("detail") or it["file"])}{sub}</li>')
+            sub = "<ul>" + "".join(f'<li>→ {fpath(t["path"], known)} ({int(t["overlap"]*100)}% of its lines came from the source)</li>' for t in it["targets"]) + "</ul>"
+        # `detail` is a sentence, not a path — only the bare-file form becomes a control.
+        head = E(it["detail"]) if it.get("detail") else fpath(it["file"], known)
+        items.append(f'<li>{head}{sub}</li>')
     n = g["count"] + sum(len(it.get("followers", [])) for it in g["items"])
     return f'''<div class="card fold"><div class="card-h"><span class="tw">▶</span><span class="pill noise">{n}</span><div class="title">{E(g["title"])}</div></div>
   <div class="card-b"><ul>{"".join(items)}</ul></div></div>'''
@@ -205,6 +223,8 @@ def main():
 
     b = []
     unc = meta.get("uncommitted_files") or []
+    # Every path the diff actually contains — what decides whether a listed file is clickable.
+    known_paths = {f["path"] for f in model["files"]} | {f["old_path"] for f in model["files"] if f.get("old_path")}
     scope = ""
     if meta.get("mode") == "branch":
         scope = f' · {meta.get("commits", 0)} commits' + (f' + <b style="color:var(--med)">{len(unc)} uncommitted files</b>' if unc else " · tree clean")
@@ -227,12 +247,12 @@ def main():
              + f'<div class="narr">{E(report["summary"])}</div>'
              + render_confession(report.get("confession"))
              + (('<details class="more" style="margin-top:.6rem"><summary>Included uncommitted changes (' + str(len(unc)) + ' files — not yet in any commit)</summary><div class="files">'
-                 + "".join(f'<span>{E(u["status"])} {E(u["path"])}</span>' for u in unc) + '</div></details>') if unc else "")
+                 + "".join(f'<span>{E(u["status"])}</span>' + fpath(u["path"], known_paths) for u in unc) + '</div></details>') if unc else "")
              + '</div></div></section>')
 
     b.append(f'<section id="phases"><h2>How it was built <span class="cnt">{len(report["phases"])} phases, in dependency order</span></h2>')
     for i, p in enumerate(report["phases"], 1):
-        files = "".join(f"<span>{E(x)}</span>" for x in p.get("files", []))
+        files = "".join(fpath(x, known_paths) for x in p.get("files", []))
         b.append(f'<div class="card{" open" if i == 1 else ""}"><div class="card-h"><span class="tw">▶</span><span class="pill phase">{i}</span><div class="title">{E(p["title"])}</div></div>'
                  f'<div class="card-b"><div class="narr">{E(p["narrative"])}</div><div class="files">{files}</div></div></div>')
     b.append("</section>")
@@ -267,7 +287,7 @@ def main():
 
     folded = report.get("folded") or model["folds"]
     b.append(f'<section id="folded"><h2>Folded as noise <span class="cnt">{st["noise_pct"]}% of changed lines</span></h2>')
-    b.extend(fold_card(g) for g in folded) if folded else b.append('<div class="empty">No noise detected.</div>')
+    b.extend(fold_card(g, known_paths) for g in folded) if folded else b.append('<div class="empty">No noise detected.</div>')
     b.append("</section>")
 
     # Conversation: comments (feedback.jsonl, type=comment) + answers (answers.jsonl)
