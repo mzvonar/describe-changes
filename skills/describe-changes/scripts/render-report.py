@@ -104,6 +104,28 @@ def finding_card(f, hunks):
     <div class="fb"><textarea placeholder="Note for the skill (what was wrong / missing / useful)…"></textarea></div>
   </div></div>'''
 
+def render_confession(conf):
+    """Author doubt as a scannable list — one line per item, detail folded behind it.
+
+    Accepts the legacy free-text string too: a paragraph of confession is still worth showing, and
+    old reports must keep rendering. But the list form is the one that gets READ, which is the whole
+    point — a reviewer skims four one-liners and opens the one that worries them, where the same
+    content as prose gets skipped wholesale and the doubt may as well not have been declared.
+    """
+    if not conf:
+        return ""
+    if isinstance(conf, str):
+        return f'<div class="conf"><b>Author confession</b><div class="narr">{E(conf)}</div></div>'
+    items = []
+    for c in conf:
+        point = E(c.get("point", "")) if isinstance(c, dict) else E(str(c))
+        detail = c.get("detail") if isinstance(c, dict) else None
+        if detail:
+            items.append(f'<li><details><summary>{point}</summary><div class="d">{E(detail)}</div></details></li>')
+        else:
+            items.append(f"<li>{point}</li>")
+    return '<div class="conf"><b>Author confession</b><ul>' + "".join(items) + "</ul></div>"
+
 CH_LABEL = {"added": "new", "modified": "changed", "removed": "deleted", "moved": "moved", "renamed": "renamed", "split": "split", "unchanged": ""}
 
 def fchip(node):
@@ -198,9 +220,12 @@ def main():
              + f'<span class="chip noise"><i class="dot"></i>{st["noise_pct"]}% folded</span></div>')
     b.append('<div class="toc"><a href="#summary">Summary</a><a href="#phases">Phases</a><a href="#map">Map</a><a href="#findings">Review</a><a href="#folded">Folded</a><a href="#unreviewed">Everything else</a><a href="#conversation">Conversation</a></div></header>')
 
-    b.append(f'<section id="summary"><h2>What was done</h2><div class="card open"><div class="card-b" style="border:0;padding-top:1rem"><div class="narr">{E(report["summary"])}</div>'
-             + (f'<div class="narr" style="margin-top:.6rem"><strong>Intent:</strong> {E(report["intent"])}</div>' if report.get("intent") else "")
-             + (f'<div class="narr" style="margin-top:.6rem"><strong>Author confession:</strong> {E(report["confession"])}</div>' if report.get("confession") else "")
+    # Intent leads, small and quiet — it FRAMES the summary instead of repeating it. Rendering it
+    # after, as an equal-weight paragraph, is what made the two read as duplicates.
+    b.append(f'<section id="summary"><h2>What was done</h2><div class="card open"><div class="card-b" style="border:0;padding-top:1rem">'
+             + (f'<div class="lede"><b>Asked for</b>{E(report["intent"])}</div>' if report.get("intent") else "")
+             + f'<div class="narr">{E(report["summary"])}</div>'
+             + render_confession(report.get("confession"))
              + (('<details class="more" style="margin-top:.6rem"><summary>Included uncommitted changes (' + str(len(unc)) + ' files — not yet in any commit)</summary><div class="files">'
                  + "".join(f'<span>{E(u["status"])} {E(u["path"])}</span>' for u in unc) + '</div></details>') if unc else "")
              + '</div></div></section>')

@@ -78,6 +78,10 @@ If you implemented the change yourself in this session you hold privileged knowl
 spots you were unsure about, guessed at, or could not test. That goes into `confession` and usually
 into a finding. Self-reported doubt is the cheapest, highest-precision signal this tool has.
 
+Write it as a **list of one-line points**, each with an optional `detail` the reader can expand —
+not a paragraph. Two to four items. A confession only works if it is read, and a wall of prose at the
+top of the report is skipped wholesale, which leaves the doubt declared but not delivered.
+
 ## 3. Analyse → write `$OUT/report.json`
 
 Follow `reference/analysis-guide.md` (severity rules, credibility budget, tags, divergence lens) and
@@ -85,6 +89,11 @@ the exact shape in `reference/report-schema.md`. The non-negotiables:
 
 - **Credibility budget:** ≤ 3 critical (hard cap), ≤ 7 medium, the rest low or unflagged. If everything
   is critical, nothing is. A false flag costs more than a miss — the reviewer tunes out forever.
+- **Attention budget on the header.** `intent` = the ask, ONE line. `summary` = what CHANGED plus the
+  one thing not obvious from it, ≤ 3 sentences. They answer different questions, so **never restate
+  the intent in the summary** — the test is "what does the reviewer still not know after reading the
+  intent line?", and the validator warns when their vocabulary overlaps > 55%. Length here is not a
+  style question: the reviewer who gives up at the top signs without reading anything below it.
 - **Every finding = a question the human can answer** (`verify`), plus `why_human` — why a machine/the
   author can't settle it (judgement, intent, blast radius, irreversibility, security, data, money).
 - **Divergence lens:** flag where what the code *does* ≠ what it *claims* (name vs body, "just a
@@ -131,13 +140,16 @@ If the `Artifact` tool is available and the user is remote, you may also publish
 
 Exactly this shape, nothing more:
 
-1. **One-paragraph summary** (what + intent), then `files that matter / total`, `lines that matter /
-   total`, `N% folded`.
+1. **The summary, once** — 2–3 sentences, the same content as `report.summary`. Do NOT also state the
+   intent: in chat the reader already knows what they asked for, so repeating it back is the purest
+   form of the padding that gets reports skimmed. Then `files that matter / total`, `lines that
+   matter / total`, `N% folded`.
 2. **Phases** as a numbered list, one line each.
 3. **Critical + medium findings** as `C1 · title — file:lines → verify question`. Low findings as a
    count only ("+4 low in the report").
-4. **Folded noise** as one line: "Folded: 3 renames (+11 import rewrites), 6 formatting hunks, 2 lockfiles".
-5. The URLs. For `--chat-only`, append the full low list, the folded groups and the map as a
+4. **Confession** as one line per point — the same list as the report, no `detail` text.
+5. **Folded noise** as one line: "Folded: 3 renames (+11 import rewrites), 6 formatting hunks, 2 lockfiles".
+6. The URLs. For `--chat-only`, append the full low list, the folded groups and the map as a
    ```mermaid``` block instead.
 
 Do not paste code. Do not repeat the report's prose. The chat view is the map's top label, the HTML

@@ -24,7 +24,40 @@ def main():
     for k in REQ_TOP:
         if k not in r: errs.append(f"missing top-level key '{k}'")
     if errs: print("\n".join("ERROR: " + e for e in errs)); sys.exit(1)
-    if not (20 <= len(r["summary"]) <= 900): warns.append(f"summary should be 1–4 sentences ({len(r['summary'])} chars)")
+    # Brevity is a correctness property here, not taste: the failure this tool exists to prevent is a
+    # rubber-stamped signature, and an over-long header is the cheapest way to cause one. Enforced
+    # mechanically because "keep it short" as advice loses to the urge to explain your own work.
+    n_sum = len(r["summary"])
+    if n_sum < 20:
+        warns.append(f"summary is too short to be useful ({n_sum} chars)")
+    elif n_sum > 700:
+        errs.append(f"summary is {n_sum} chars; hard cap 700. Cut to what a reviewer cannot infer from the intent line.")
+    elif n_sum > 420:
+        warns.append(f"summary is {n_sum} chars — aim for ≤ 420 (about 3 sentences)")
+    if len(re.findall(r"[.!?](?:\s|$)", r["summary"])) > 4:
+        warns.append("summary runs to more than 4 sentences — the header is skimmed, not read")
+    if r.get("intent"):
+        if len(r["intent"]) > 260:
+            warns.append(f"intent is {len(r['intent'])} chars — it should be ONE line naming what was asked, not a retelling")
+        # Duplicate detection: intent and summary answer different questions (asked vs done). When they
+        # share most of their vocabulary the reader gets the same paragraph twice and starts skipping.
+        sig = lambda s: {w for w in re.findall(r"[a-z]{5,}", s.lower())}
+        a, c = sig(r["intent"]), sig(r["summary"])
+        if a and c:
+            overlap = len(a & c) / min(len(a), len(c))
+            if overlap > 0.55:
+                warns.append(f"intent and summary overlap {overlap:.0%} — intent is what was ASKED, summary is what CHANGED and why it is non-obvious; do not restate")
+    conf = r.get("confession")
+    if isinstance(conf, list):
+        for i, item in enumerate(conf):
+            if not isinstance(item, dict) or not item.get("point"):
+                errs.append(f"confession[{i}]: each item needs a one-line 'point' (plus optional 'detail')")
+            elif len(item["point"]) > 180:
+                warns.append(f"confession[{i}]: point is {len(item['point'])} chars — it is a headline; move the rest into 'detail'")
+        if len(conf) > 6:
+            warns.append(f"{len(conf)} confession items — if everything is doubtful nothing is; keep the ones that would change what a reviewer does")
+    elif isinstance(conf, str) and len(conf) > 300:
+        warns.append("confession is a long string — use the list form [{point, detail}] so a reviewer can skim it and expand only what matters")
 
     ids, counts = set(), {"critical": 0, "medium": 0, "low": 0}
     for f in r["findings"]:

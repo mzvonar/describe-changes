@@ -99,6 +99,8 @@ PY
 cat > "$OUT/report.json" <<'J'
 { "title": "Split util + upsert users", "intent": "Split big util, rename strings→text, persist users",
   "summary": "Renames the string helpers module, splits the oversized util file in two, and makes saveUser persist via db.upsert — a behaviour change beyond the refactor.",
+  "confession": [ {"point":"Never ran the persistence path against a real db.","detail":"The test fake accepts any shape, so upsert's overwrite semantics are unverified."},
+                  {"point":"The split point between big-a and big-b was a guess."} ],
   "phases": [ {"id":"p1","title":"Module reshuffle","narrative":"Rename + split, imports follow.","files":["src/util/text.ts","src/util/big-a.ts","src/util/big-b.ts"]},
               {"id":"p2","title":"Persistence","narrative":"saveUser now writes to db.","files":["src/api/users.ts"]} ],
   "graph": { "nodes": [ {"id":"saveUser","label":"saveUser()","kind":"function","change":"modified","file":"src/api/users.ts"},
@@ -127,6 +129,14 @@ python3 "$S/render-report.py" --dir "$OUT"
 grep -q 'data-id="C1"' "$OUT/index.html" || fail "finding card missing"
 grep -q 'db.upsert' "$OUT/index.html" || fail "hunk snippet not embedded"
 grep -q 'class="mermaid"' "$OUT/index.html" || fail "mermaid map missing"
+# Header shape (1.1.0): the ask is a subordinate lede, and confession is a skimmable list whose
+# detail hides behind the point. A regression to one prose blob is silent otherwise — it still
+# renders, it just stops being read, which is the failure this tool exists to prevent.
+grep -q 'class="lede"' "$OUT/index.html" || fail "intent lede missing"
+grep -q 'class="conf"' "$OUT/index.html" || fail "confession list missing"
+grep -q 'The split point between big-a and big-b was a guess' "$OUT/index.html" || fail "confession point without detail not rendered"
+grep -q '<summary>Never ran the persistence path' "$OUT/index.html" || fail "confession point with detail is not expandable"
+grep -q 'upsert&#x27;s overwrite semantics are unverified' "$OUT/index.html" || fail "confession detail not rendered"
 grep -q 'class="adoption"' "$OUT/index.html" && grep -q 'class="flow"' "$OUT/index.html" && grep -q 'class="screen"' "$OUT/index.html" || fail "views missing"
 grep -q 'id="file-store"' "$OUT/index.html" && grep -q 'data-open="src/api/users.ts"' "$OUT/index.html" || fail "file store / chips missing"
 grep -q 'Renamed files' "$OUT/index.html" || fail "fold card missing"
