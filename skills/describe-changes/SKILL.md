@@ -29,12 +29,16 @@ Never re-derive the noise pass by hand, never write HTML, never paste the raw di
 ```bash
 SKILL_DIR=<dir containing this SKILL.md>        # ${CLAUDE_PLUGIN_ROOT}/skills/describe-changes, or .claude/skills/describe-changes, or ~/.claude/skills/describe-changes
 S="$SKILL_DIR/scripts"
+DEV_CHECKOUT=$(git -C "$(readlink -f "$SKILL_DIR")" rev-parse --show-toplevel 2>/dev/null)
 ```
 
 Arguments (all optional): a git range / ref / `--staged` / `-- path` (passed through to `git diff`);
 `--task "…"` or `--story <file>` = the intent source; `--chat-only` = skip HTML (phone-only sessions);
-`--port N` for the server. Staleness: if `.claude/skills/.describe-changes-version` exists and a local
-`~/Development/describe-changes` checkout is ahead of its `sha=`, mention it once — never block.
+`--port N` for the server. Staleness: in dev mode `$SKILL_DIR` is a symlink into the checkout you edit,
+so **resolve it — never assume a path**. If `$DEV_CHECKOUT` is non-empty and is not the repo being
+described, and this repo has `.claude/skills/.describe-changes-version`, compare that file's `sha=`
+with `git -C "$DEV_CHECKOUT" rev-parse HEAD`: if they differ, the vendored copy is behind your
+checkout — mention it once, never block.
 
 **Intent source, in priority order:** explicit `--task`/`--story` → the story/task file you implemented
 this session → PR/MR description → `commits.txt` from step 1 → the branch name. Read it; the report is

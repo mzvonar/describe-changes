@@ -64,12 +64,17 @@ place, edits are live everywhere on the next invocation, and "merge upstream" is
 Agent-runnable from scratch:
 
 ```bash
-git clone git@github.com:mzvonar/describe-changes.git ~/Development/describe-changes
+DC=<any path you like>                              # e.g. ~/Development/describe-changes, /srv/describe-changes
+git clone git@github.com:mzvonar/describe-changes.git "$DC"
 for P in ~/.claude ~/.claude-personal; do
-  [ -d "$P/skills" ] && ln -sfn ~/Development/describe-changes/skills/describe-changes "$P/skills/describe-changes"
+  [ -d "$P/skills" ] && ln -sfn "$DC/skills/describe-changes" "$P/skills/describe-changes"
 done
-bash ~/Development/describe-changes/tests/run.sh    # verify before trusting it on a real diff
+bash "$DC/tests/run.sh"                             # verify before trusting it on a real diff
 ```
+
+`$DC` is yours to choose and is never hardcoded anywhere: the skill finds the checkout by resolving
+its own symlink (`readlink -f "$SKILL_DIR"` → `git rev-parse --show-toplevel`), so the staleness check
+in SKILL.md step 0 works regardless of where you cloned it. `$DC` below means that same checkout.
 
 Then, once per consumer repo, add `.describe-changes/` to its `.gitignore` (report + feedback output
 is written into every repo you run the skill on).
@@ -100,7 +105,7 @@ change is worth telling apart.
 For teammates, CI, and machines that are not iterating on the skill:
 
 ```bash
-cd ~/Development/describe-changes
+cd "$DC"                                     # your checkout (see dev mode above)
 ./sync-skill.sh /path/to/consumer            # pinned to main (needs a commit here)
 ./sync-skill.sh /path/to/consumer --ref <ref>
 ./sync-skill.sh /path/to/consumer --worktree # copy the current working tree, uncommitted edits included
@@ -113,7 +118,7 @@ If you edited a vendored copy in place while using it, `./sync-skill.sh --from /
 copies it back here; review, commit, then forward-sync every consumer again. Dev mode never needs
 this — there is only one copy.
 
-**Plugin:** `claude --plugin-dir ~/Development/describe-changes`, or
+**Plugin:** `claude --plugin-dir "$DC"`, or
 `/plugin marketplace add <path-or-repo>` → `/plugin install describe-changes@describe-changes`.
 
 ## Use
