@@ -11,7 +11,15 @@ Keys marked ● are required.
   // ● What CHANGED, plus the one thing that is not obvious from it. ≤ 3 sentences / 420 chars
   // (hard cap 700). It must NOT restate the intent — the validator warns when they overlap > 55%.
   // Test: "what does the reviewer still not know after reading the intent line?" Answer only that.
-  "summary": "Steps carry an `execution` block that `runStep` resolves per step, falling back to the workflow default. The non-obvious part: an unset `mode` no longer inherits the daemon's — it resolves to `default`.",
+  //
+  // FUNCTIONAL, not mechanical: what a person can now do, what they can no longer do, and the rule
+  // that decides which — in the product's own words. Mechanism earns a place only when it IS a
+  // decision or a risk. Compare:
+  //   ✗ "Guarded by one invariant re-asserted inside the write transaction over a row lock."
+  //   ✓ "The last admin can't remove or demote themselves — the controls disappear rather than fail."
+  // Same fact; the second is the one a reviewer can act on. The validator warns when a summary
+  // carries more than three `backticked` identifiers, which is the usual tell for the first shape.
+  "summary": "A step can now pick its own model and effort instead of taking the workflow's. Steps that say nothing keep today's behaviour — except for permission mode, where an unset value now means `default` rather than inheriting the daemon's.",
   // Author doubt, as a LIST — one scannable line each, the longer explanation folded behind it.
   // 2–4 items is the useful range; > 6 warns (if everything is doubtful, nothing is).
   "confession": [

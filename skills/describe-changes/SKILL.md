@@ -94,6 +94,15 @@ the exact shape in `reference/report-schema.md`. The non-negotiables:
   the intent in the summary** — the test is "what does the reviewer still not know after reading the
   intent line?", and the validator warns when their vocabulary overlaps > 55%. Length here is not a
   style question: the reviewer who gives up at the top signs without reading anything below it.
+- **The summary is FUNCTIONAL, not mechanical.** Say what a person can now do, what they can no
+  longer do, and the rules that decide which — in the product's own words, the ones on the buttons.
+  Mechanism (locks, transactions, capabilities, cache tags, file moves) belongs in the summary *only*
+  where it **is** a decision or a risk the reviewer must weigh; otherwise it lives in the phases, the
+  findings, or nowhere. Test each clause: *would this sentence change what a non-author asks about?*
+  "Guarded by an invariant re-asserted inside the write transaction over a row lock" fails it —
+  "**the last admin can't remove or demote themselves; the controls disappear rather than fail**"
+  passes, and is the same fact stated where the reviewer lives. A summary that reads like a commit
+  message is the second-commonest way this report gets rubber-stamped, after being too long.
 - **Every finding = a question the human can answer** (`verify`), plus `why_human` — why a machine/the
   author can't settle it (judgement, intent, blast radius, irreversibility, security, data, money).
 - **Divergence lens:** flag where what the code *does* ≠ what it *claims* (name vs body, "just a

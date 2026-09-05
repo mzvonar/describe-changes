@@ -36,6 +36,13 @@ def main():
         warns.append(f"summary is {n_sum} chars — aim for ≤ 420 (about 3 sentences)")
     if len(re.findall(r"[.!?](?:\s|$)", r["summary"])) > 4:
         warns.append("summary runs to more than 4 sentences — the header is skimmed, not read")
+    # Mechanism-first tell. A functional summary names what a person can now do; a mechanical one
+    # names the symbols that do it. Counting `backticked` identifiers is a crude proxy, but it fires
+    # on exactly the shape that reads like a commit message — and that shape is the second-commonest
+    # reason this section gets skipped, after length.
+    n_sym = len(re.findall(r"`[^`]+`", r["summary"]))
+    if n_sym > 3:
+        warns.append(f"summary names {n_sym} code symbols — say what a PERSON can now do and which rule stops them; keep mechanism for where it IS the decision")
     if r.get("intent"):
         if len(r["intent"]) > 260:
             warns.append(f"intent is {len(r['intent'])} chars — it should be ONE line naming what was asked, not a retelling")
