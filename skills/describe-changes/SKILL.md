@@ -109,7 +109,9 @@ the exact shape in `reference/report-schema.md`. The non-negotiables:
   refactor" that changes behaviour, scope creep beyond the task, PII/secrets wrapped or renamed,
   hidden global state, error paths swallowed). That is the part no linter does.
 - **Phases** = dependency order (foundations → domain → wiring → tests), not file or commit order.
-  2–6 phases; each narrative is 1–3 sentences a stranger can follow.
+  2–6 phases; each narrative is 1–3 sentences a stranger can follow. They render *after* the map and
+  views: the reader wants the shape of the change before the walkthrough of it, and a phase list read
+  cold is a sequence of unfamiliar names. Write them expecting the reader has already seen the map.
 - **Views** (`reference/visualizations.md`): pick 0–3 from the toolset — `screen` (nested boxes:
   screen → slots → what fills them) for UI chrome, `flow` (created → deleted → re-pointed → restyled)
   when the commits tell a story, `adoption` (root → used in → replaces) for every extracted shared
@@ -158,8 +160,9 @@ Exactly this shape, nothing more:
    count only ("+4 low in the report").
 4. **Confession** as one line per point — the same list as the report, no `detail` text.
 5. **Folded noise** as one line: "Folded: 3 renames (+11 import rewrites), 6 formatting hunks, 2 lockfiles".
-6. The URLs. For `--chat-only`, append the full low list, the folded groups and the map as a
-   ```mermaid``` block instead.
+6. The URLs. For `--chat-only` there is no page to link, so inline the rest: the map as a
+   ```mermaid``` block **between the summary and the phases** — same order as the report, and for the
+   same reason — then the full low list and the folded groups at the end.
 
 Do not paste code. Do not repeat the report's prose. The chat view is the map's top label, the HTML
 is the zoom.

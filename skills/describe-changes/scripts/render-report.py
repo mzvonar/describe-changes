@@ -238,7 +238,9 @@ def main():
              + f'<span class="chip"><b>{st["files_substantive"]}</b>/{st["files"]} files matter</span>'
              + f'<span class="chip"><b>{st["lines_substantive"]}</b>/{st["lines_changed"]} lines matter</span>'
              + f'<span class="chip noise"><i class="dot"></i>{st["noise_pct"]}% folded</span></div>')
-    b.append('<div class="toc"><a href="#summary">Summary</a><a href="#phases">Phases</a><a href="#map">Map</a><a href="#findings">Review</a><a href="#folded">Folded</a><a href="#unreviewed">Everything else</a><a href="#conversation">Conversation</a></div></header>')
+    # Listed in the order the page actually renders them — a nav that disagrees with the page is a
+    # small lie the reader catches immediately, and it costs the report credibility it needs later.
+    b.append('<div class="toc"><a href="#summary">Summary</a><a href="#map">Map</a><a href="#phases">Phases</a><a href="#findings">Review</a><a href="#folded">Folded</a><a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a></div></header>')
 
     # Intent leads, small and quiet — it FRAMES the summary instead of repeating it. Rendering it
     # after, as an equal-weight paragraph, is what made the two read as duplicates.
@@ -250,13 +252,11 @@ def main():
                  + "".join(f'<span>{E(u["status"])}</span>' + fpath(u["path"], known_paths) for u in unc) + '</div></details>') if unc else "")
              + '</div></div></section>')
 
-    b.append(f'<section id="phases"><h2>How it was built <span class="cnt">{len(report["phases"])} phases, in dependency order</span></h2>')
-    for i, p in enumerate(report["phases"], 1):
-        files = "".join(fpath(x, known_paths) for x in p.get("files", []))
-        b.append(f'<div class="card{" open" if i == 1 else ""}"><div class="card-h"><span class="tw">▶</span><span class="pill phase">{i}</span><div class="title">{E(p["title"])}</div></div>'
-                 f'<div class="card-b"><div class="narr">{E(p["narrative"])}</div><div class="files">{files}</div></div></div>')
-    b.append("</section>")
-
+    # Pictures before prose. The map and views answer "what shape is this change?", which is the
+    # question a reviewer has immediately after the summary — and the one that decides how carefully
+    # they read everything below. Phases are the walkthrough you want AFTER you can see the terrain;
+    # printed first they are a list of unfamiliar names in dependency order.
+    #
     # Views (the visualization toolset) — chosen per change by the analysis.
     for i, v in enumerate(report.get("views") or [], 1):
         fn = VIEWS.get(v.get("kind"))
@@ -274,6 +274,13 @@ def main():
         if report["graph"].get("narrative"): b.append(f'<div class="narr" style="margin-top:.6rem">{E(report["graph"]["narrative"])}</div>')
     else:
         b.append('<div class="empty">No structural map for this change.</div>')
+    b.append("</section>")
+
+    b.append(f'<section id="phases"><h2>How it was built <span class="cnt">{len(report["phases"])} phases, in dependency order</span></h2>')
+    for i, p in enumerate(report["phases"], 1):
+        files = "".join(fpath(x, known_paths) for x in p.get("files", []))
+        b.append(f'<div class="card{" open" if i == 1 else ""}"><div class="card-h"><span class="tw">▶</span><span class="pill phase">{i}</span><div class="title">{E(p["title"])}</div></div>'
+                 f'<div class="card-b"><div class="narr">{E(p["narrative"])}</div><div class="files">{files}</div></div></div>')
     b.append("</section>")
 
     b.append(f'<section id="findings"><h2>What a human must check <span class="cnt">important first</span></h2>')

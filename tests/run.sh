@@ -129,6 +129,23 @@ python3 "$S/render-report.py" --dir "$OUT"
 grep -q 'data-id="C1"' "$OUT/index.html" || fail "finding card missing"
 grep -q 'db.upsert' "$OUT/index.html" || fail "hunk snippet not embedded"
 grep -q 'class="mermaid"' "$OUT/index.html" || fail "mermaid map missing"
+# Pictures before prose: map + views precede the phase walkthrough, and the TOC agrees with the page.
+python3 - "$OUT/index.html" <<'PY' || fail "section order regressed"
+import re, sys
+h = open(sys.argv[1]).read()
+body = h.split('<div class="toc"', 1)[1]
+SECTIONS = ('id="summary"', 'id="view-1"', 'id="map"', 'id="phases"', 'id="findings"',
+            'id="folded"', 'id="conversation"', 'id="unreviewed"')
+order = [s for s in SECTIONS if s in body]
+pos = [body.index(s) for s in order]
+ok = pos == sorted(pos) and body.index('id="map"') < body.index('id="phases"')
+toc = h.split('<div class="toc"', 1)[1].split("</div>", 1)[0]
+anchors = [a for a in re.findall(r'href="#([^"]+)"', toc)]
+in_page = [a for a in anchors if f'id="{a}"' in body]
+ok = ok and in_page == sorted(in_page, key=lambda a: body.index(f'id="{a}"'))
+print("section order OK" if ok else f"FAIL order={order}")
+sys.exit(0 if ok else 1)
+PY
 # Header shape (1.1.0): the ask is a subordinate lede, and confession is a skimmable list whose
 # detail hides behind the point. A regression to one prose blob is silent otherwise — it still
 # renders, it just stops being read, which is the failure this tool exists to prevent.
