@@ -26,6 +26,9 @@ diff in → fold the noise → phases + visual map → the ~3 things a human mus
   adds, and working notes (plans, handoffs, journals — never an ADR, wiki page or changelog).
 - **Everything else** — the honest list of substantive files that got no flag, each with a ⚑ gut-flag
   button ("something feels off here — dig in").
+- **Since you last read this** — a report is read again after the fixes land, and the second reading
+  asks a different question. Every render snapshots the report; the next one opens with what moved:
+  findings resolved / added / re-rated, checks re-written (so un-ticked), the commits in between.
 
 Rendered twice: a short chat view (the map's top label) and a **mobile-first HTML report** (cards,
 collapsible, filterable by severity/tag, copyable `file:line`, feedback buttons). The skill then stays
@@ -52,6 +55,8 @@ skills/describe-changes/
   scripts/render-report.py      report.json → index.html (mobile-first, mermaid map, snippets)
   scripts/serve.py              HTTP server (LAN + Tailscale URLs) + POST /feedback capture
   scripts/feedback.py           lessons store: ingest / question / outcome / push / digest / export
+  scripts/snapshots.py          every version of a report + what changed between two of them
+  scripts/report_keys.py        content hashes that keep a finding/check identifiable across re-renders
   assets/template.html          CSS + JS shell (collapse, filter, feedback, mermaid loader)
 sync-skill.sh                   vendor into consumer repos (forward) / pull edits back (backward)
 tests/run.sh                    smoke test of every script on a synthetic repo (no LLM)

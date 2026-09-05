@@ -171,6 +171,23 @@ self-contained except the mermaid renderer (CDN); the map's text fallback shows 
 If the `Artifact` tool is available and the user is remote, you may also publish `$OUT/index.html`
 (keep the same file path on re-publish). Skip all of this with `--chat-only`.
 
+**Every render records a snapshot** (`$OUT/snapshots/<seq>-<head7>`), and the next render opens with
+**"Since you last read this"** — findings resolved / added / changed, checks re-written (and so
+un-ticked), the commits that landed in between, the scope delta. Identical states are not saved
+twice, so re-rendering while you edit does not bury the version the reader actually read.
+
+```bash
+python3 "$S/snapshots.py" list --dir "$OUT"                      # what versions exist
+python3 "$S/snapshots.py" diff --dir "$OUT" --from first         # the whole arc since the first read
+python3 "$S/render-report.py" --dir "$OUT" --snapshot-label "after review fixes"
+```
+
+**Suggest a commit before re-describing.** When the user is about to act on the report — fixing a
+finding, applying a review round — say once, before they start: *"commit what's here first and the
+next report will be able to show you exactly what the fixes changed."* A snapshot taken against a
+dirty tree can still be compared, but only a committed one gives the delta a real `A → B` range and
+commit list. Never commit for them: suggest, then follow their instruction.
+
 ## 6. Present in chat (altitude 0 — short)
 
 Exactly this shape, nothing more:
@@ -219,6 +236,11 @@ For each follow-up:
 - If the Q&A reveals a **missed finding, a false positive, or a wrong severity**: update `report.json`,
   re-run steps 4–5 (the URL stays the same), and log it:
   `python3 "$S/feedback.py" outcome --dir "$OUT" --kind missed|false_positive|severity_changed --finding C2|new --text "…"`
+- **When fixes land, re-describe rather than patch the prose.** Re-run step 1 (same `--out`), update
+  the findings the fix resolved, re-render — the reader opens the same URL and the delta section
+  tells them what moved. Suggest committing the fixes first (§5): the delta then names the commits,
+  and the report the user read stays pinned as its own snapshot instead of being overwritten by a
+  moving worktree.
 
 ## 8. Close the learning loop
 

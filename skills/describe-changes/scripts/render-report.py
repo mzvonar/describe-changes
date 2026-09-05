@@ -9,6 +9,8 @@ cards. Deterministic: same inputs → same HTML.
 import argparse, html, json, os, re, sys, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import importlib.util
+import snapshots
+from report_keys import check_key
 _spec = importlib.util.spec_from_file_location("classify_diff", os.path.join(os.path.dirname(os.path.abspath(__file__)), "classify-diff.py"))
 classify_diff = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(classify_diff)
 
@@ -196,19 +198,65 @@ VIEWS = {"screen": view_screen, "flow": view_flow, "adoption": view_adoption}
 
 SURFACE_LABEL = {"ui": "screen", "api": "API", "cli": "command"}
 
-def check_key(c):
-    """A content hash of what the reader actually verified — feature, surface, where, setup, steps,
-    expect, request.
+def delta_section(d, report, meta, model):
+    """What moved since the last snapshot — the returning reader's whole question, answered up top.
 
-    The `V<n>` id is positional: re-authoring the report can hand V7 to a different capability
-    entirely, so a tick replayed by id would mark a check nobody ran. Hashing the text means an
-    untouched card keeps its tick across any number of refreshes, and a card whose steps or
-    expectation changed correctly loses it — the reviewer verified the old wording, not this one.
-    `covered_by` is excluded: moving a spec file does not change what the reader has to do.
+    Silent on a first render (there is nothing to compare), and silent when nothing changed: a
+    section that always appears and usually says "no change" trains the reader to skip it.
     """
-    payload = json.dumps({k: c.get(k) for k in ("feature", "surface", "where", "setup", "steps", "expect", "request")},
-                         sort_keys=True, ensure_ascii=False)
-    return hashlib.sha1(payload.encode()).hexdigest()[:12]
+    snaps = snapshots.list_snapshots(d)
+    if not snaps:
+        return ""
+    # The newest snapshot is usually THIS state (the previous render saved it), and diffing a state
+    # against itself would blank the section on every re-render — including the one the reader
+    # reloads to see what changed. Compare against the last snapshot that actually says something
+    # different, so the answer to "what moved" survives until something moves again.
+    fp_now = snapshots._fingerprint(report, meta)
+    older = [s for s in snaps if s.get("fingerprint") != fp_now]
+    if not older:
+        return ""
+    before = snapshots.load_snapshot(d, older[-1]["name"])
+    after = {"info": {"name": "now"}, "report": report, "meta": meta, "model": model}
+    dl = snapshots.compute_delta(before, after)
+    rows = []
+    def group(cls, title, items, fmt):
+        if items:
+            rows.append(f'<div class="dl-g"><b class="{cls}">{E(title)}</b><ul>'
+                        + "".join(f"<li>{fmt(i)}</li>" for i in items) + "</ul></div>")
+    group("dl-out", "Resolved — no longer in the report", dl["findings_resolved"],
+          lambda f: f'<span class="pill {E(f["severity"])}">{E(f["id"])}</span> {E(f["title"])}')
+    group("dl-in", "New findings", dl["findings_added"],
+          lambda f: f'<span class="pill {E(f["severity"])}">{E(f["id"])}</span> {E(f["title"])}')
+    group("dl-ch", "Changed", dl["findings_changed"],
+          lambda c: (f'<span class="pill {E(c["severity"])}">{E(c["id"])}</span> {E(c["title"])}'
+                     + (f' <span class="dim">(was {E(c["was_severity"])} {E(c["was_id"] or "")})</span>'
+                        if c["was_severity"] != c["severity"] else "")))
+    group("dl-ch", "Checks re-written — a tick on these was dropped, the steps are not the ones you ran",
+          dl["checks_reworded"], lambda c: f'<span class="pill check">{E(c["id"])}</span> {E(c["feature"])}')
+    group("dl-in", "New checks", dl["checks_added"],
+          lambda c: f'<span class="pill check">{E(c["id"])}</span> {E(c["feature"])}')
+    group("dl-out", "Checks dropped", dl["checks_removed"],
+          lambda c: f'<span class="pill check">{E(c["id"])}</span> {E(c["feature"])}')
+    if dl["commits"]:
+        rows.append('<div class="dl-g"><b>Work landed since</b><ul>'
+                    + "".join(f'<li><code>{E(c)}</code></li>' for c in dl["commits"][:12]) + "</ul></div>")
+    sb, sa = dl["stats_before"] or {}, dl["stats_after"] or {}
+    if sb and sa and (sb.get("files_substantive") != sa.get("files_substantive") or sb.get("noise_pct") != sa.get("noise_pct")):
+        rows.append(f'<div class="dl-g"><b>Scope</b><ul><li>{sb.get("files_substantive","?")} → '
+                    f'{sa.get("files_substantive","?")} files to read · {sb.get("noise_pct","?")}% → '
+                    f'{sa.get("noise_pct","?")}% folded</li></ul></div>')
+    if dl["summary_changed"]:
+        rows.append('<div class="dl-g"><b>The summary was rewritten</b><ul><li>read the header again</li></ul></div>')
+    if not rows:
+        return ""
+    when = (before.get("info") or {}).get("saved_at") or ""
+    head = f'{E(dl["from"])}{(" · " + E(when[:16])) if when else ""}'
+    if dl["from_head"] and dl["to_head"] and dl["from_head"] != dl["to_head"]:
+        head += f' · <code>{E(dl["from_head"])} → {E(dl["to_head"])}</code>'
+    elif dl["uncommitted_now"]:
+        head += f' · {dl["uncommitted_now"]} file(s) still uncommitted'
+    return (f'<section id="since"><h2>Since you last read this <span class="cnt">{head}</span></h2>'
+            f'<div class="card open delta"><div class="card-b">{"".join(rows)}</div></div></section>')
 
 def check_card(c):
     """One shipped capability, with the steps to exercise it for real.
@@ -395,6 +443,8 @@ def fold_card(g, known=None, hunks=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True); ap.add_argument("--template"); ap.add_argument("--out")
+    ap.add_argument("--no-snapshot", action="store_true", help="render without recording a snapshot")
+    ap.add_argument("--snapshot-label", help="name this snapshot (e.g. 'first pass', 'after review fixes')")
     a = ap.parse_args()
     d = a.dir
     report = json.load(open(os.path.join(d, "report.json")))
@@ -438,6 +488,11 @@ def main():
     b.append('<div class="toc"><a href="#summary">Summary</a><a href="#map">Map</a><a href="#phases">Phases</a><a href="#findings">Review</a>'
              + ('<a href="#check">How to check</a>' if report.get("how_to_check") else "")
              + '<a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a><a href="#folded">Folded</a></div></header>')
+
+    # "Since you last read this" comes FIRST, and only when there is a previous snapshot. A report
+    # read twice is answering a different question the second time — what moved — and making the
+    # returning reader re-scan everything to find out is the same attention tax as an unfolded diff.
+    b.append(delta_section(d, report, meta, model))
 
     # Intent leads, small and quiet — it FRAMES the summary instead of repeating it. Rendering it
     # after, as an equal-weight paragraph, is what made the two read as duplicates.
@@ -602,6 +657,10 @@ def main():
     out = tpl.replace("__TITLE__", E(title)).replace("__BODY__", "\n".join(b)).replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
     out_path = a.out or os.path.join(d, "index.html")
     open(out_path, "w").write(out)
+    # Snapshot AFTER rendering, so the delta above compares against what the reader last saw rather
+    # than against the version being written now. Identical states are not saved twice.
+    if not a.out and not a.no_snapshot:
+        snapshots.cmd_save(argparse.Namespace(dir=d, label=a.snapshot_label))
     print(f"rendered {out_path} ({len(out)//1024} KB): {counts['critical']}C/{counts['medium']}M/{counts['low']}L, {len(report['graph'].get('nodes', []))} map nodes")
 
 if __name__ == "__main__":

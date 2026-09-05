@@ -432,6 +432,30 @@ PY
 grep -q 'Renamed files' "$OUT/index.html" || fail "fold card missing"
 grep -q 'row fold-row' "$OUT/index.html" && grep -A3 'row fold-row' "$OUT/index.html" | grep -q 'row-body' || fail "everything-else rows not expandable"
 
+# Snapshots: a report read twice must be able to say what moved between the readings.
+python3 "$S/snapshots.py" list --dir "$OUT" | grep -q "001-" || fail "the render did not record a snapshot"
+python3 "$S/snapshots.py" diff --dir "$OUT" | grep -q "Nothing changed" || fail "an unchanged report must report no delta"
+python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+python3 "$S/snapshots.py" list --dir "$OUT" | grep -cq "^" && [ "$(python3 "$S/snapshots.py" list --dir "$OUT" | wc -l)" = "1" ] \
+  || fail "an unchanged re-render must not pile up snapshots"
+python3 - "$OUT" <<'PY' || fail "could not stage the second snapshot"
+import json, os, sys
+d = sys.argv[1]; p = os.path.join(d, "report.json"); r = json.load(open(p))
+r["findings"] = [dict(r["findings"][0], id="M1", severity="medium",
+                      title="A different claim entirely about the same file")]
+r["how_to_check"][0]["steps"] = ["Open /users.", "Save a user that already exists.", "Reload."]
+json.dump(r, open(p, "w"))
+PY
+python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+DELTA="$(python3 "$S/snapshots.py" diff --dir "$OUT" --from first --to last)"
+case "$DELTA" in *"Findings changed"*) ;; *) fail "a re-worded finding must read as changed, not as one gone + one new: $DELTA" ;; esac
+case "$DELTA" in *"Checks re-written"*) ;; *) fail "an edited check must be called out (its tick was dropped): $DELTA" ;; esac
+grep -q "Since you last read this" "$OUT/index.html" || fail "the delta is not rendered on the page"
+grep -q "a tick on these was dropped" "$OUT/index.html" || fail "the page must say why a tick vanished"
+python3 "$S/snapshots.py" list --dir "$OUT" | grep -q "002-" || fail "the changed render did not snapshot"
+echo "snapshots OK"
+git checkout -q "$OUT/report.json" 2>/dev/null || true
+
 # budget violation must fail
 python3 - "$OUT" <<'PY'
 import json, sys, os, copy
