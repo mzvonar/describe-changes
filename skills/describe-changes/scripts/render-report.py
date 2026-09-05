@@ -257,6 +257,66 @@ def fold_ref(path, hunk_ids, hunks, label=None):
     return (f'<button class="fpath" data-open-hunks="{E(",".join(mine))}" data-open-label="{E(path)}"'
             f' title="Show the folded change in {E(path)}">{E(label or path)}</button>')
 
+UNNAMED_COMPONENT = "the receiving component is not named inside the hunk"
+
+def flow_node(label, path, hids, hunks, known):
+    """A node in the flow: its own folded pass-site if it has one, else its whole diff, else inert.
+
+    A receiving component often has NO folded hunk — its change is the declaration, which stays in
+    the visible list on purpose — so falling back to the file diff is what keeps the node live."""
+    if not path: return f'<span class="dim">{E(label)}</span>'
+    mine = [hid for hid in (hids or []) if hid in (hunks or {}) and hunks[hid][1] == path]
+    if mine: return fold_ref(path, hids, hunks, label=label)
+    if known is not None and path not in known: return f'<span class="dim">{E(label)}</span>'
+    return f'<button class="fpath" data-open="{E(path)}" title="Show the changes in {E(path)}">{E(label)}</button>'
+
+def flow_tree(item, hunks, known=None):
+    """Where a threaded prop flows: pass-site file → the component it hands the prop to → that
+    component's own pass-sites, as an indented tree.
+
+    Built from edges the diff proves. A target the diff never names (the `<Tag` sits above the
+    hunk's context) is shown as unknown rather than dropped, and every file node opens its folded
+    pass-site. Cycle-guarded: a component can appear once per branch."""
+    edges = item.get("flow") or []
+    if not edges: return ""
+    hids = item.get("hunk_ids") or []
+    by_from = {}
+    for e in edges: by_from.setdefault(e["from"], []).append(e)
+    receivers = {e.get("to_file") for e in edges if e.get("to_file")}
+    roots = [p for p in by_from if p not in receivers] or sorted(by_from)
+    out = []
+    unknown = False
+    def node(label, path, depth, last, trunk, suffix=""):
+        prefix = "".join("   " if t else "│  " for t in trunk) + ("" if depth == 0 else ("└─ " if last else "├─ "))
+        out.append(f'<div class="frow"><span class="ftree">{E(prefix)}</span>'
+                   f'{flow_node(label, path, hids, hunks, known)}{suffix}</div>')
+    def named(path):
+        return [e for e in by_from.get(path, []) if e.get("to")]
+    def mark(path):
+        # A row whose receiving component the diff never names gets a "→ ?" rather than a child row
+        # saying so: four such rows under four files was the whole diagram for a prop that was
+        # REMOVED from four call sites, and said nothing the file list did not.
+        nonlocal unknown
+        if len(named(path)) == len(by_from.get(path, [])): return ""
+        unknown = True
+        return '<span class="dim"> → ?</span>'
+    def walk_children(path, depth, trunk, seen):
+        kids = named(path)
+        for i, e in enumerate(kids):
+            is_last = i == len(kids) - 1
+            tgt, tf = e["to"], e.get("to_file")
+            node(f"<{tgt}>", tf if tf else None, depth + 1, is_last, trunk, mark(tf) if tf else "")
+            if tf and tf not in seen: walk_children(tf, depth + 1, trunk + [is_last], seen | {tf})
+    for r in roots:
+        node(short(r), r, 0, True, [], mark(r))
+        walk_children(r, 0, [], {r})
+    legend = f'<div class="fnote">→ ? — {UNNAMED_COMPONENT}</div>' if unknown else ""
+    return f'<div class="flow">{"".join(out)}</div>{legend}'
+
+def short(path):
+    parts = path.split("/")
+    return "/".join(parts[-2:]) if len(parts) > 2 else path
+
 def fold_card(g, known=None, hunks=None):
     # Folded files stay openable. The reader is told to skip this section, which is exactly why the
     # escape hatch matters: the one failure folding can cause is hiding a real change inside a
@@ -268,6 +328,15 @@ def fold_card(g, known=None, hunks=None):
             sub = ("<ul>" + "".join(
                 f'<li>{fold_ref(x["file"], x.get("hunk_ids"), hunks or {}) if x.get("hunk_ids") else fpath(x["file"], known)}'
                 f' — {E(x["detail"])}</li>' for x in it["followers"]) + "</ul>")
+        if it.get("prop"):
+            # The prop card answers "where does this thing flow", which a file list cannot: the
+            # value is threaded, so the shape of the change IS the chain of components it passes
+            # through. Diffs stay one tap away on every node.
+            decl = it.get("declared_in") or []
+            note = (f'<div class="fnote">declared in {", ".join(E(short(p)) for p in decl)}</div>') if decl else ""
+            items.append(f'<li><code>{E(it["prop"])}</code> <span style="color:var(--fg3)">← {E(it["verb"])}</span>'
+                         f'{note}{flow_tree(it, hunks, known)}</li>')
+            continue
         if it.get("files"):
             sub = ('<details class="more"><summary>show files</summary><ul>'
                    + "".join(f'<li>{fold_ref(x, it.get("hunk_ids"), hunks or {})}</li>' for x in it["files"])

@@ -138,6 +138,14 @@ button.fpath:active{border-color:var(--info)}
 .fold ul{list-style:none;font-family:var(--mono);font-size:.78rem;color:var(--fg2)}
 .fold li{padding:.3rem 0;border-bottom:1px dashed var(--line);word-break:break-all}
 .fold li ul{margin:.3rem 0 0 1rem}.fold li ul li{border:0;padding:.12rem 0;color:var(--fg3)}
+/* Prop-threading flow: an indented tree, drawn with box characters so it needs no layout engine
+   and survives a collapsed card, no-CDN and print. Every file node is still a button. */
+.fold .fnote{color:var(--fg3);font-size:.72rem;padding:.15rem 0 .1rem}
+.fold .flow{margin:.35rem 0 .1rem;overflow-x:auto}
+.fold .flow .frow{display:flex;align-items:baseline;gap:0;white-space:nowrap;padding:.08rem 0}
+.fold .flow .ftree{color:var(--fg3);white-space:pre}
+.fold .flow .dim{color:var(--fg3)}
+.fold .flow button.fpath{margin:0}
 .unrev{font-family:var(--mono);font-size:.8rem}
 .unrev .row{display:flex;align-items:center;gap:.5rem;padding:.45rem 0;border-bottom:1px dashed var(--line)}
 /* Only the PATH grows. This used to be `.row span{flex:1}`, which also matched the caret — a

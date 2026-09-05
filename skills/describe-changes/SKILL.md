@@ -19,8 +19,9 @@ allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob
 **Goal:** make the human's signature on this change honest, at the lowest possible attention cost.
 The human is the bottleneck, not the code. You allocate their attention; you do not dump a diff.
 
-**Division of labour (hard rule):** scripts do everything mechanical — range resolution, rename/move/
-split/whitespace/format/import-rewrite folding, code snippets, HTML, feedback capture. You do only what
+**Division of labour (hard rule):** scripts do everything mechanical — range resolution, folding
+(rename/move/split, whitespace/format, imports, prop threading, index rows, working notes), code
+snippets, HTML, feedback capture. You do only what
 scripts cannot: say what the change *means*, draw the map, and decide the ~3 things a human must check.
 Never re-derive the noise pass by hand, never write HTML, never paste the raw diff into chat.
 

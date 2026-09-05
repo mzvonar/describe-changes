@@ -62,6 +62,37 @@ import { zeta } from '../util/big';
 import { gamma } from '../util/flags';
 export function legacy(c: boolean) { return gamma(c); }
 F
+# A prop threaded through three components, plus the two shapes that must NOT fold with it: a
+# declaration (the contract) and a prop whose VALUE changed at a call site.
+mkdir -p src/ui
+cat > src/ui/page-shell.tsx <<'F'
+export const PageShell = ({ title }: { title: string }) => (
+  <div>
+    <TopBar title={title} items={LEGACY_ITEMS} />
+    <Divider />
+    <SideNav title={title} />
+  </div>
+);
+F
+cat > src/ui/top-bar.tsx <<'F'
+interface Props {
+  title: string;
+}
+export const TopBar = ({ title }: Props) => (
+  <header>
+    <UserMenu title={title} />
+  </header>
+);
+F
+cat > src/ui/user-menu.tsx <<'F'
+interface Props {
+  title: string;
+}
+export const UserMenu = ({ title }: Props) => <span>{title}</span>;
+F
+mkdir -p docs/plans docs/adr
+printf '# plan\n\nstep one\n' > docs/plans/old-plan.md
+printf '# ADR index\n\n| id | title |\n| -- | ----- |\n' > docs/adr/README.md
 # An import block long enough that the `} from "…"` falls outside the hunk's context: the module
 # cannot be named, but the direction still can.
 cat > src/api/wide.ts <<'F'
@@ -121,6 +152,47 @@ cat > src/api/legacy.ts <<'F'
 import { gamma } from '../util/flags';
 export function legacy(c: boolean) { return gamma(c); }
 F
+# `canEdit` is declared once and threaded down two levels; `items=` changes VALUE at the same call
+# site and must survive as substantive.
+cat > src/ui/page-shell.tsx <<'F'
+export const PageShell = ({ title, canEdit }: { title: string; canEdit: boolean }) => (
+  <div>
+    <TopBar title={title} items={NEXT_ITEMS} />
+    <Divider />
+    <SideNav
+      title={title}
+      canEdit={canEdit}
+    />
+  </div>
+);
+F
+cat > src/ui/top-bar.tsx <<'F'
+interface Props {
+  title: string;
+  canEdit: boolean;
+}
+export const TopBar = ({
+  title,
+  canEdit,
+}: Props) => (
+  <header>
+    <UserMenu
+      title={title}
+      canEdit={canEdit}
+    />
+  </header>
+);
+F
+cat > src/ui/user-menu.tsx <<'F'
+interface Props {
+  title: string;
+  canEdit: boolean;
+}
+export const UserMenu = ({ title }: Props) => <span>{title}</span>;
+F
+printf '# plan\n\nstep one\n\nstep two, added while implementing\n' > docs/plans/old-plan.md
+printf '# ADR index\n\n| id | title |\n| -- | ----- |\n| [0007](0007-new-decision.md) | A new decision |\n' > docs/adr/README.md
+printf '# 0007 New decision\n\nWe chose A over B.\n' > docs/adr/0007-new-decision.md
 cat > src/api/wide.ts <<'F'
 import {
   a0,
@@ -170,6 +242,26 @@ drop = imports.get("../util/big") or fail(f"dropped import not grouped by its mo
 assert "no longer imported in 1 file" == drop["verb"], drop
 assert drop["removed_in"] == ["src/api/legacy.ts"] and drop["added_in"] == [], drop
 assert not any("dropped" in it["detail"] and "src/api/barrel.ts" in it["detail"] for it in folds["import-rewrite"]["items"]), folds["import-rewrite"]
+# Prop threading: pass-sites fold, the DECLARATION does not, and a value change at the same call
+# site survives. The fold carries the flow (which component hands the prop to which).
+thread = {it["prop"]: it for it in folds["prop-thread"]["items"]}
+t = thread.get("canEdit") or fail(f"canEdit thread not folded: {list(thread)}")
+assert t["kind"] == "added" and t["files"] == ["src/ui/page-shell.tsx", "src/ui/top-bar.tsx"], t
+assert set(t["declared_in"]) == {"src/ui/top-bar.tsx", "src/ui/user-menu.tsx"}, t
+edges = {(e["from"].split("/")[-1], e["to"]) for e in t["flow"]}
+assert ("page-shell.tsx", "SideNav") in edges and ("top-bar.tsx", "UserMenu") in edges, t["flow"]
+assert {e["to_file"] for e in t["flow"]} == {None, "src/ui/user-menu.tsx"}, t["flow"]
+decl = [h for h in files["src/ui/top-bar.tsx"]["hunks"] if h["category"] == "substantive"]
+assert decl, "the prop DECLARATION must stay substantive — it is the contract"
+assert any(h["category"] == "substantive" for h in files["src/ui/page-shell.tsx"]["hunks"]), \
+    "items={LEGACY_ITEMS} → {NEXT_ITEMS} at the same call site must NOT fold with the prop"
+# Working notes fold as a file; an ADR does not.
+notes = {it["file"] for it in folds["notes"]["items"]}
+assert notes == {"docs/plans/old-plan.md"}, notes
+assert files["docs/adr/0007-new-decision.md"]["noise_kind"] is None, "an ADR is never working notes"
+# The index row pointing at THAT new ADR is bookkeeping.
+reg = folds["registry"]["items"]
+assert [it["file"] for it in reg] == ["docs/adr/README.md"] and reg[0]["target"] == "docs/adr/0007-new-decision.md", reg
 # Module outside the hunk: unnamed, but never mis-signed.
 unnamed = [it for it in folds["import-rewrite"]["items"] if not it["module"]]
 assert len(unnamed) == 1 and unnamed[0]["files"] == ["src/api/wide.ts"], unnamed
@@ -310,6 +402,22 @@ PY
 python3 "$S/render-report.py" --dir "$OUT" >/dev/null   # restore the real page for later assertions
 grep -q '← no longer imported in 1 file' "$OUT/index.html" || fail "import fold: removed direction not rendered"
 ! grep -q 'unused imports dropped' "$OUT/index.html" || fail "import fold: stale removal label rendered"
+# The prop fold draws the flow, and every node in it is a live control.
+python3 - "$OUT/index.html" <<'PY' || fail "prop-thread flow tree not rendered as live nodes"
+import re, sys
+h = open(sys.argv[1]).read()
+i = h.find("Props threaded through components")
+seg = h[i:i + 4000] if i >= 0 else ""
+ok = (i >= 0
+      and "new prop threaded through 2 files" in seg
+      and "&lt;UserMenu&gt;" in seg and "&lt;SideNav&gt;" in seg
+      and "└─" in seg
+      and 'data-open="src/ui/user-menu.tsx"' in seg              # a component in the diff opens its file
+      and '<span class="dim">&lt;SideNav&gt;</span>' in seg      # one that is not stays inert, never a dead control
+      and re.search(r'data-open-hunks="[^"]+" data-open-label="src/ui/page-shell\.tsx"', seg))  # pass-site opens its hunk
+print("prop flow OK" if ok else f"FAIL: {seg[:400]!r}")
+sys.exit(0 if ok else 1)
+PY
 # The gut-flag wiring must not swallow the row's Collapse button (it did: `.unrev button` matched
 # both, and the later assignment replaced the collapse handler outright).
 grep -q "\$\$('.unrev button\[data-file\]')" "$OUT/index.html" || fail "gut-flag selector is not scoped to the flag buttons"

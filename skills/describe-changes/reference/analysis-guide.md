@@ -72,7 +72,12 @@ never guess a move the script didn't see.
 
 `diff-model.json` already folded: pure renames (+ the import rewrites that follow them), moves,
 splits, whitespace-only and format-only hunks (not in whitespace-sensitive languages), comment-only
-hunks, lockfiles, generated/snapshot/binary files. Copy its `folds` into `report.folded`. If you
+hunks, lockfiles, generated/snapshot/binary files, **prop threading** (a prop declared once and
+passed at N call sites — the declaration stays visible, the pass-sites fold under a flow of the
+components it travels through), **index/registry rows** whose link target is a file this change
+adds, and **working notes** (plans, handoffs, journals, a lessons inbox — never an ADR, a wiki page,
+a README or a changelog, which are the "why" a reviewer needs most).
+Copy its `folds` into `report.folded`. If you
 notice a fold that hides a real change (a "rename" at 52% similarity that also changed logic, a
 snapshot that changed because behaviour did), surface that as a finding — that is exactly the
 "P0 buried in the noise" failure this tool exists to prevent.

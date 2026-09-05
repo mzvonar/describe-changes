@@ -17,7 +17,9 @@ diff in → fold the noise → phases + visual map → the ~3 things a human mus
   reviewer can answer* with the code snippet one tap away. Over-flagging is treated as the cardinal
   sin: credibility is the only currency.
 - **Folded as noise** — pure renames with their import rewrites nested under them, moves, splits,
-  whitespace/format-only hunks, comment-only hunks, lockfiles, generated files, snapshots.
+  whitespace/format-only hunks, comment-only hunks, lockfiles, generated files, snapshots, prop
+  threading (with a flow of the components the prop passes through), index rows for files the change
+  adds, and working notes (plans, handoffs, journals — never an ADR, wiki page or changelog).
 - **Everything else** — the honest list of substantive files that got no flag, each with a ⚑ gut-flag
   button ("something feels off here — dig in").
 

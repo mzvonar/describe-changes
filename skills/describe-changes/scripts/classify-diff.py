@@ -60,6 +60,22 @@ SYMBOL_RE = re.compile(r"""^\s*(?:export\s+)?(?:default\s+)?(?:pub(?:\([^)]*\))?
 SPEC_RE = re.compile(r"""(['"])([^'"]+)\1""")
 UNRESOLVED_MODULE = "(module not named in the hunk)"
 
+# Working notes: the prose a change PRODUCES rather than the change itself — plans, handoffs, a
+# lessons inbox, an append-only journal, a deferred-work backlog. Markdown only, and a decision
+# record (ADR), a wiki page, a README or a changelog is deliberately NOT here: those are the "why"
+# a reviewer most needs. Override with DESCRIBE_CHANGES_NOTES_RE when a repo names them differently.
+NOTES_RE = re.compile(os.environ.get("DESCRIBE_CHANGES_NOTES_RE") or
+                      r"(^|/)_bmad-output/|(^|/)plans?/|(^|/)(deferred-work|lessons-inbox|scratch)\.md$"
+                      r"|(^|/)[^/]*handoff[^/]*\.md$|(^|/)wiki/log\.md$", re.I)
+MD_EXT = (".md", ".mdx")
+LINK_RE = re.compile(r"\]\(([^)\s]+)")
+JSX_OPEN_RE = re.compile(r"<([A-Z][\w.]*)")
+# A TYPE annotation, not an object-literal entry: the value side must be a TS primitive, a
+# capitalised type, or a function type. `foo: bar,` in a literal does not qualify, and JSON keys
+# are quoted so they never reach here.
+PROP_DECL_RE = re.compile(r"^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:\s*"
+                          r"(?:boolean|string|number|bigint|symbol|\(|[A-Z][\w.<>\[\]|\s]*)")
+
 def ext_of(path):
     base = os.path.basename(path)
     if base in WS_SENSITIVE_NAMES: return "Makefile"
@@ -209,8 +225,66 @@ def file_noise_kind(f, added_text):
     if base in LOCKFILES: return "lockfile"
     if SNAPSHOT_RE.search(f.path): return "snapshot"
     if GENERATED_RE.search(f.path): return "generated"
+    if ext_of(f.path) in MD_EXT and NOTES_RE.search(f.path): return "notes"
     head = "\n".join(added_text[:8])
     if f.status == "added" and any(m in head for m in GENERATED_MARKERS): return "generated"
+    return None
+
+def kebab(name):
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", name.split(".")[-1]).lower()
+
+def registry_row(path, block, added_paths):
+    """A one-line index/table row pointing at a file ADDED in this same change.
+
+    `| [ADR-0051](0051-….md) | … |` restates a file the reviewer is already reading in full; it is
+    bookkeeping the change owes its index, not a change. Folds ONLY when the link target is one of
+    this diff's new files — a row pointing anywhere else is an edit to a live document."""
+    if ext_of(path) not in MD_EXT or block["removed"] or len(block["added"]) != 1: return None
+    line = block["added"][0].strip()
+    if not (line.startswith("|") or line.startswith("- ") or line.startswith("* ")): return None
+    here = os.path.dirname(path)
+    for target in LINK_RE.findall(line):
+        p = os.path.normpath(os.path.join(here, target.split("#")[0]))
+        if p in added_paths: return p
+    return None
+
+def prop_uses_re(name):
+    return re.compile(r"\b" + re.escape(name) + r"\b\s*(?:=\s*\{[^{}]*\}|=\s*\"[^\"]*\")?\s*,?")
+
+def thread_block(block, name):
+    """Is this block a pure pass-site for `name` — the prop added (or removed) and nothing else?
+
+    Exactly one side may mention the prop, and after deleting its occurrences the two sides must be
+    textually identical. `items={ACCOUNTANT_MORE_ITEMS}` → `items={moreItems}` therefore does NOT
+    fold: the prop is absent from both sides, and were it present on both, the remainders differ."""
+    rem = [l for l in block["removed"] if l.strip()]; add = [l for l in block["added"] if l.strip()]
+    has_r, has_a = any(name in l for l in rem), any(name in l for l in add)
+    if has_r == has_a: return None
+    sub = prop_uses_re(name)
+    norm = lambda ls: re.sub(r"[\s,]+", "", "".join(sub.sub("", l) for l in ls))
+    if norm(rem) != norm(add): return None
+    return "removed" if has_r else "added"
+
+def target_component(hunk, block, lines, prev=None):
+    """The component a pass-site hands the prop to: the tag on the changed line, else the nearest
+    opening tag above it (a multi-line JSX element puts each prop on its own line).
+
+    A long element can push its `<Tag` past the hunk's three context lines and into the PREVIOUS
+    hunk — that is how `<AccountantTopSidebar` went missing while the prop line was right there. The
+    scan continues into that hunk only when the two are contiguous, so a tag 200 lines up is never
+    claimed as the target."""
+    for l in lines:
+        m = JSX_OPEN_RE.search(l)
+        if m: return m.group(1)
+    def scan(h, upto):
+        for i in range(upto - 1, -1, -1):
+            raw = h.lines[i]; m = JSX_OPEN_RE.search(raw[1:] if raw[:1] in "+- " else raw)
+            if m: return m.group(1)
+        return None
+    found = scan(hunk, block.get("start", 0))
+    if found or prev is None: return found
+    if prev.new_start + prev.new_len >= hunk.new_start - 3:
+        return scan(prev, len(prev.lines))
     return None
 
 TOPLEVEL_ONLY = ("const", "let", "var", "val")
@@ -380,6 +454,80 @@ def main():
                 if src_for_removed and rem and not add and rem <= target_content[src_for_removed]: b["category"] = "moved"
                 elif src_for_added and add and not rem and add <= deleted_content.get(src_for_added, set()): b["category"] = "moved"
             if getattr(h, "blocks", None) and all(b["category"] == "moved" for b in h.blocks): h.category = "moved"
+
+    # Registry rows + prop threading. Both are mechanical restatement the block classifier cannot
+    # see, because both are ordinary code/prose lines — what makes them noise is a relationship to
+    # something ELSE in the same diff (a file it adds, a prop it declares).
+    added_paths = {e["path"] for e in model_files if e["status"] == "added"}
+    declared = defaultdict(lambda: {"added": [], "removed": []})   # prop -> where its type was declared
+    for f in files:
+        if ext_of(f.path) not in (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"): continue
+        for h in f.hunks:
+            for side in ("added", "removed"):
+                for l in getattr(h, side):
+                    m = PROP_DECL_RE.match(l)
+                    if m and f.path not in declared[m.group(1)][side]: declared[m.group(1)][side].append(f.path)
+    threads = defaultdict(lambda: {"files": [], "hunk_ids": [], "flow": [], "kind": None})
+    for f in files:
+        for hi, h in enumerate(f.hunks):
+            for b in getattr(h, "blocks", []):
+                if b["category"] != "substantive": continue
+                target = registry_row(f.path, b, added_paths)
+                if target:
+                    b["category"] = "registry"
+                    folds["registry"].append({"file": f.path, "hunk_ids": [h.id], "target": target,
+                                              "detail": f"index row for {target}"})
+                    continue
+                declares = {m.group(1) for l in b["added"] + b["removed"] for m in [PROP_DECL_RE.match(l)] if m}
+                for name, where in declared.items():
+                    if not (where["added"] or where["removed"]): continue
+                    if name in declares: continue     # the declaration itself stays visible; only pass-sites fold
+                    kind = thread_block(b, name)
+                    if not kind: continue
+                    b["category"] = "prop-thread"
+                    t = threads[name]; t["kind"] = kind if t["kind"] in (None, kind) else "changed"
+                    if f.path not in t["files"]: t["files"].append(f.path)
+                    t["hunk_ids"].append(h.id)
+                    side = b["added"] if kind == "added" else b["removed"]
+                    # A `prop,` line RECEIVES the value (a destructured parameter); only a JSX
+                    # attribute PASSES it on. Without the distinction every receiving component
+                    # emitted an edge to an unknown child and the flow filled with "not named".
+                    if all(re.match(r"^\s*" + re.escape(name) + r"\s*,\s*$", l) for l in side if l.strip()):
+                        continue
+                    passes = re.compile(r"^\s*" + re.escape(name) + r"(?:\s*=\s*\{[^{}]*\}|\s*=\s*\"[^\"]*\")?\s*/?>?\s*$")
+                    if not any(passes.match(l) or (JSX_OPEN_RE.search(l) and name in l) for l in side):
+                        continue      # a parameter list or type member: the file RECEIVES, it does not pass on
+                    comp = target_component(h, b, side, f.hunks[hi - 1] if hi else None)
+                    # An unresolved target is still an edge: the pass-site file is a fact, and
+                    # dropping it would silently shrink the flow to the tags that happened to be
+                    # inside a hunk. The renderer says "component not named in the hunk".
+                    if not any(x["from"] == f.path and x["to"] == comp for x in t["flow"]):
+                        t["flow"].append({"from": f.path, "to": comp})
+                    break
+    for f in files:
+        for h in f.hunks:
+            if getattr(h, "blocks", None) and all(b["category"] in ("registry", "prop-thread") for b in h.blocks):
+                h.category = h.blocks[0]["category"]
+
+    # A prop threaded inside ONE file is a local rename, not drilling: require a pass-site outside
+    # the file that declares it, or the item says nothing a reviewer could not see in one hunk.
+    base_to_path = {kebab(os.path.splitext(os.path.basename(e["path"]))[0]): e["path"] for e in model_files}
+    for name, t in list(threads.items()):
+        decl = declared[name]["added"] + declared[name]["removed"]
+        if len(set(t["files"]) | set(decl)) < 2: del threads[name]; continue
+        for edge in t["flow"]: edge["to_file"] = base_to_path.get(kebab(edge["to"] or ""))
+        n = len(t["files"])       # files is exact; component names are only known where a tag was in reach
+        where = f"{n} file{'s' if n != 1 else ''}"
+        t["verb"] = (f"new prop threaded through {where}" if t["kind"] == "added"
+                     else f"prop removed from {where}" if t["kind"] == "removed"
+                     else f"prop re-threaded through {where}")
+        folds["prop-thread"].append({"file": name, "prop": name, "kind": t["kind"], "verb": t["verb"],
+                                     "files": sorted(t["files"]), "hunk_ids": list(dict.fromkeys(t["hunk_ids"])),
+                                     "declared_in": sorted(set(decl)), "flow": t["flow"],
+                                     "detail": f"{name} — {t['verb']}: " + ", ".join(sorted(t["files"]))})
+    folds["prop-thread"].sort(key=lambda it: -len(it["files"]))
+
+    for f in files:
         # refresh the model entry for this file
         e = by_path.get(f.path)
         if e:
@@ -439,15 +587,18 @@ def main():
                                     "detail": (f"{mod} ← " if not mod.startswith(UNRESOLVED_MODULE) else "") + verb(mod, v) + ": " + ", ".join(sorted(v["files"]))}
                                    for mod, v in sorted(by_mod.items(), key=lambda kv: -len(kv[1]["files"]))]
     fold_titles = {"rename": "Renamed files (imports updated to match)", "move": "Moved files", "split": "Files split",
-                   "import-rewrite": "Import-only changes (module ← the files whose imports of it changed)", "whitespace": "Whitespace-only hunks",
+                   "import-rewrite": "Import-only changes (module ← the files whose imports of it changed)",
+                   "prop-thread": "Props threaded through components (prop ← where it flows)",
+                   "whitespace": "Whitespace-only hunks",
                    "format": "Formatting-only hunks", "comment-only": "Comment-only hunks",
+                   "registry": "Index / registry rows for files added here", "notes": "Working notes (plans, handoffs, journals)",
                    "lockfile": "Lockfiles", "generated": "Generated / build output", "snapshot": "Test snapshots",
                    "vendored": "Vendored code", "binary": "Binary files"}
+    ORDER = ["rename", "move", "split", "import-rewrite", "prop-thread", "format", "whitespace", "comment-only",
+             "registry", "notes", "lockfile", "generated", "snapshot", "vendored", "binary"]
     fold_list = [{"kind": k, "title": fold_titles.get(k, k), "count": len(v), "items": v}
                  for k, v in folds.items() if v]
-    fold_list.sort(key=lambda x: ["rename", "move", "split", "import-rewrite", "format", "whitespace", "comment-only",
-                                  "lockfile", "generated", "snapshot", "vendored", "binary"].index(x["kind"])
-                   if x["kind"] in fold_titles else 99)
+    fold_list.sort(key=lambda x: ORDER.index(x["kind"]) if x["kind"] in ORDER else 99)
 
     files_sub = [e for e in model_files if e["substantive_hunks"] > 0]
     model = {
