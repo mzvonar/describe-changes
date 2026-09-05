@@ -90,12 +90,27 @@ def finding_card(f, hunks):
             f'<div class="l d">{E(l)}</div>' for l in (f.get("before") or "").splitlines()) + "".join(
             f'<div class="l a">{E(l)}</div>' for l in (f.get("after") or "").splitlines()) + "</pre></div>"
     code = snippets or before_after
+    # A convention finding is only as good as what it cites, so the citation travels WITH the claim:
+    # the reviewer settles "new direction or mistake?" by opening the rule and the neighbour, and a
+    # claim whose evidence lives in the analyst's head is indistinguishable from taste.
+    refs = f.get("diverges_from") or []
+    if isinstance(refs, (str, dict)): refs = [refs]
+    div = ""
+    if refs:
+        rows = []
+        for ref in refs:
+            s = ref.get("ref", "") if isinstance(ref, dict) else str(ref)
+            why = ref.get("why") if isinstance(ref, dict) else None
+            rows.append(f'<li><span class="loc" data-loc="{E(s)}">⧉ {E(s)}</span>'
+                        + (f' — {E(why)}' if why else "") + "</li>")
+        div = f'<div class="kv"><b>Diverges from</b><ul class="refs">{"".join(rows)}</ul></div>'
     return f'''<div class="card sev-{sev}" data-id="{E(f["id"])}" data-sev="{sev}" data-tags="{E(" ".join(tags))}">
   <div class="card-h"><span class="tw">▶</span><span class="pill {sev}">{E(f["id"])}</span>
     <div class="title">{E(f["title"])}<small>{E(loc)}</small></div></div>
   <div class="card-b">
     <div class="verify"><b>Verify</b>{E(f["verify"])}</div>
     <div class="kv"><b>Why a human</b>{E(f["why_human"])}</div>
+    {div}
     {('<div class="kv"><b>What changed</b>' + E(f["what"]) + '</div>') if f.get("what") else ""}
     {('<div class="tags">' + "".join(f'<span class="tag">{E(t)}</span>' for t in tags) + '</div>') if tags else ""}
     <div><span class="loc" data-loc="{E(loc)}">⧉ {E(loc)}</span></div>

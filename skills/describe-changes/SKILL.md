@@ -57,7 +57,7 @@ not HEAD); `--committed-only` limits it to HEAD; on the default branch it is the
 HEAD. `meta.json` records `commits`, `uncommitted_files` and a tree `fingerprint`. Say in chat how
 much of the change is uncommitted — the reviewer must know a signature on HEAD would not cover it.
 
-Produces `$OUT/{raw.diff,numstat.txt,commits.txt,meta.json,diff-model.json,substantive.diff}`.
+Produces `$OUT/{raw.diff,numstat.txt,commits.txt,meta.json,diff-model.json,substantive.diff,conventions.txt}`.
 Exit 2 = nothing to describe; stop and say so. Add `.describe-changes/` to the repo's `.gitignore`
 if it is not there (it holds reports + feedback, never source).
 
@@ -74,6 +74,15 @@ prefer `Grep` for the one symbol over reading the file.
 — spawn one analyst per slice in parallel with the template in `reference/analyst-prompt.md`, read
 the small slices (docs, config) yourself, then synthesize. Never read 9k lines serially and call it
 analysis.
+
+**Judge the code against its neighbours, not against your taste.** `$OUT/conventions.txt` names the
+rule documents that govern the changed paths (CLAUDE.md/AGENTS.md, skills, ADRs — ranked by whether
+they actually talk about these files) and the untouched siblings in every changed directory. Read
+the rules that cover what changed, and open one sibling per changed directory before you clear it.
+New code that contradicts a written rule or the local precedent — a skipped layer, a second way to
+do what the codebase already does one way, a library the project does not use — is a finding, and a
+structural one is **critical**: it propagates, and only a human can call it direction or mistake.
+Cite the rule or ≥ 2 siblings in `diverges_from`; uncited, it is taste and the validator rejects it.
 
 **Mine the repo's own review trail first.** `deferred-work.md`, `lessons-inbox.md`, review-findings
 sections, PR comments: deferred items are the author's *known* doubts — list them under

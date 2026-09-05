@@ -441,6 +441,36 @@ json.dump(r, open(os.path.join(d, "bad.json"), "w"))
 PY
 if python3 "$S/check-report.py" "$OUT/bad.json" >/dev/null 2>&1; then fail "check-report accepted 5 criticals"; fi
 
+# A `convention` finding lives or dies on its citation: it is the only thing separating "the rule
+# says X and two siblings do X" from "I'd have written it differently", and the second one costs
+# the report its credibility.
+python3 - "$OUT" <<'PY'
+import json, os, sys
+d = sys.argv[1]; r = json.load(open(os.path.join(d, "report.json")))
+base = dict(r["findings"][0], id="M1", severity="medium", tags=["convention"])
+def w(name, **kw): json.dump(dict(r, findings=[dict(base, **kw)]), open(os.path.join(d, name), "w"))
+w("conv-none.json")                                                     # no citation at all
+w("conv-ghost.json", diverges_from=["docs/nope-does-not-exist.md:3"])   # cites a file that is not there
+w("conv-one.json", diverges_from=["src/util/notes.ts:2"])               # one neighbour, no rule
+w("conv-rule.json", diverges_from=[{"ref": "docs/adr/0007-new-decision.md", "why": "we chose A"}])
+w("conv-two.json", diverges_from=["src/util/notes.ts:2", "src/util/text.ts:1"])
+PY
+for bad in conv-none conv-ghost conv-one; do
+  if python3 "$S/check-report.py" "$OUT/$bad.json" >/dev/null 2>&1; then fail "check-report accepted $bad"; fi
+done
+# NB `cmd | grep` under pipefail reports the FAILING cmd, not grep — capture, then match.
+CONV_MSG="$(python3 "$S/check-report.py" "$OUT/conv-none.json" 2>&1 || true)"
+case "$CONV_MSG" in *diverges_from*) ;; *) fail "the rejection must name the missing field: $CONV_MSG" ;; esac
+python3 "$S/check-report.py" "$OUT/conv-rule.json" >/dev/null || fail "a cited written rule must pass"
+python3 "$S/check-report.py" "$OUT/conv-two.json" >/dev/null || fail "two neighbours must pass"
+# …and the citation reaches the page, next to the claim.
+cp "$OUT/report.json" "$OUT/report-real.json"; cp "$OUT/conv-rule.json" "$OUT/report.json"
+python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+grep -q "Diverges from" "$OUT/index.html" && grep -q 'data-loc="docs/adr/0007-new-decision.md"' "$OUT/index.html" \
+  && grep -q "we chose A" "$OUT/index.html" || fail "diverges_from not rendered on the finding"
+mv "$OUT/report-real.json" "$OUT/report.json"; python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+echo "convention citations OK"
+
 # feedback round trip
 printf '%s\n' '{"ts":"2026-01-01T00:00:00Z","type":"less","finding":"C1","report_id":"x"}' '{"ts":"2026-01-01T00:00:01Z","type":"gut_flag","file":"script.py","report_id":"x"}' > "$OUT/feedback.jsonl"
 python3 "$S/feedback.py" ingest "$OUT/feedback.jsonl" --dir "$OUT" | grep -q "ingested 2" || fail "ingest"

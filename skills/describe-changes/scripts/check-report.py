@@ -12,6 +12,50 @@ SEV = {"critical": "C", "medium": "M", "low": "L"}
 MAX_CRITICAL, MAX_MEDIUM = 3, 7
 REQ_TOP = ["title", "summary", "phases", "graph", "findings", "folded"]
 
+def repo_root_of(report_path):
+    d = os.path.dirname(os.path.abspath(report_path))
+    try:
+        meta = json.load(open(os.path.join(d, "meta.json")))
+        if meta.get("root") and os.path.isdir(meta["root"]): return meta["root"]
+    except Exception: pass
+    while d != "/":                                   # the report lives inside the repo it describes
+        if os.path.isdir(os.path.join(d, ".git")): return d
+        d = os.path.dirname(d)
+    return None
+
+def check_divergence(f, fid, root):
+    """A `convention` finding must cite what it diverges FROM.
+
+    This is the whole difference between a convention finding and a style opinion. "I would have
+    written it the other way" is taste and costs credibility; "the rule says X and these two
+    siblings do X" is checkable, and the reviewer can open both. So the citation is required, its
+    paths must exist, and a claim resting on local precedent needs TWO neighbours — one sibling
+    doing it differently is a coincidence, not a convention."""
+    errs, warns = [], []
+    refs = f.get("diverges_from") or []
+    if isinstance(refs, (str, dict)): refs = [refs]
+    if "convention" not in (f.get("tags") or []):
+        if refs: warns.append(f"{fid}: has 'diverges_from' but is not tagged 'convention'")
+        return errs, warns
+    if not refs:
+        errs.append(f"{fid}: a 'convention' finding must cite what it diverges from in 'diverges_from' "
+                    f"(a rule like CLAUDE.md:161, or 2+ neighbours that do it the other way). "
+                    f"Uncited, it is taste — drop it or cite it.")
+        return errs, warns
+    paths = []
+    for ref in refs:
+        s = ref.get("ref", "") if isinstance(ref, dict) else str(ref)
+        if not s: errs.append(f"{fid}: empty entry in 'diverges_from'"); continue
+        p = s.split(":")[0]
+        paths.append(p)
+        if root and not os.path.exists(os.path.join(root, p)):
+            errs.append(f"{fid}: diverges_from '{s}' — no such file in the repo")
+    rules = [p for p in paths if os.path.splitext(p)[1] in (".md", ".mdc", ".txt") or os.path.basename(p).startswith(".")]
+    if not rules and len(set(paths)) < 2:
+        errs.append(f"{fid}: 'diverges_from' cites one neighbour and no written rule — one sibling is a "
+                    f"coincidence. Cite the rule, or a second file that does it the other way.")
+    return errs, warns
+
 def main():
     if len(sys.argv) < 2:
         print("usage: check-report.py <report.json> [diff-model.json]"); sys.exit(2)
@@ -19,6 +63,7 @@ def main():
     r = json.load(open(rp))
     model_path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(rp), "diff-model.json")
     model = json.load(open(model_path)) if os.path.exists(model_path) else None
+    repo_root = repo_root_of(rp)
     known_files = {f["path"] for f in model["files"]} | {f["old_path"] for f in model["files"] if f.get("old_path")} if model else None
     errs, warns = [], []
     for k in REQ_TOP:
@@ -81,6 +126,8 @@ def main():
             errs.append(f"{fid}: file '{f['file']}' is not in the diff")
         if f.get("lines") and not re.fullmatch(r"\d+(-\d+)?", str(f["lines"])): errs.append(f"{fid}: lines must be 'N' or 'N-M'")
         if len(f.get("why_human", "")) > 400: warns.append(f"{fid}: why_human is long ({len(f['why_human'])} chars) — compress")
+        e2, w2 = check_divergence(f, fid, repo_root)
+        errs += e2; warns += w2
     if counts["critical"] > MAX_CRITICAL:
         errs.append(f"{counts['critical']} critical findings > budget {MAX_CRITICAL}. If everything is critical, nothing is — demote.")
     if counts["medium"] > MAX_MEDIUM: warns.append(f"{counts['medium']} medium findings > soft budget {MAX_MEDIUM}")

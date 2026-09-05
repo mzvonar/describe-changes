@@ -16,6 +16,10 @@ diff in → fold the noise → phases + visual map → the ~3 things a human mus
 - **What a human must check** — critical (≤ 3, hard cap) / medium / low cards, each a *question the
   reviewer can answer* with the code snippet one tap away. Over-flagging is treated as the cardinal
   sin: credibility is the only currency.
+- **Where the code parts company with the codebase** — a structural divergence from a written rule
+  or from what every neighbouring file does ranks critical, because it propagates and only a human
+  can call it direction or mistake. It must cite the rule (or two neighbours) it contradicts;
+  `conventions.txt` collects the candidates and the validator rejects an uncited one as taste.
 - **Folded as noise** — pure renames with their import rewrites nested under them, moves, splits,
   whitespace/format-only hunks, comment-only hunks, lockfiles, generated files, snapshots, prop
   threading (with a flow of the components the prop passes through), index rows for files the change
@@ -41,7 +45,8 @@ skills/describe-changes/
   reference/analysis-guide.md   severity rules, credibility budget, tags, divergence lens
   reference/report-schema.md    report.json — the LLM ↔ renderer contract
   reference/learning-loop.md    feedback channels, local/shared store, maintainer workflow
-  scripts/collect-diff.sh       range resolution → raw.diff, numstat, commits, meta.json, then ↓
+  scripts/collect-diff.sh       range resolution → raw.diff, numstat, commits, meta.json,
+                                conventions.txt (rules + neighbours governing the changed paths), then ↓
   scripts/classify-diff.py      deterministic noise pass → diff-model.json + substantive.diff
   scripts/check-report.py       validates report.json (budget, ids, file refs, graph)
   scripts/render-report.py      report.json → index.html (mobile-first, mermaid map, snippets)

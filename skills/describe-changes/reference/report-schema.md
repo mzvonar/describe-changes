@@ -61,6 +61,20 @@ Keys marked ● are required.
       "file": "src/daemon/executor.ts", "lines": "118-131", "hunks": ["F4H2"],
       "tags": ["divergence", "auth", "blast-radius"]
       // optional instead of hunks: "before": "…code…", "after": "…code…"
+    },
+    {
+      "id": "C2", "severity": "critical",
+      "title": "`removeMemberAsUser` reads Prisma directly instead of going through the repository",
+      "verify": "Is this deliberately outside the layer rule, or should it call `membershipRepository`?",
+      "why_human": "The rule exists to keep tenant scoping in one place; whether this is a new direction is the author's call.",
+      "file": "src/features/org/service/member-service.ts", "lines": "44-58", "hunks": ["F9H1"],
+      "tags": ["convention", "blast-radius"],
+      // REQUIRED on a `convention` finding: what it contradicts. A written rule, or ≥ 2 neighbours
+      // that do it the other way. Uncited = taste, and check-report.py rejects it.
+      "diverges_from": [
+        { "ref": "CLAUDE.md:161", "why": "service layer never touches Prisma directly" },
+        { "ref": "src/features/org/service/invitation-service.ts:22" }
+      ]
     }
   ],
 

@@ -149,4 +149,67 @@ PY
 
 python3 "$HERE/classify-diff.py" --diff "$OUT/raw.diff" --numstat "$OUT/numstat.txt" --out "$OUT"
 
+# conventions.txt — the authorities a convention finding must cite: written guidelines that govern
+# the changed paths, and the untouched neighbours the new code sits next to. Mechanical on purpose;
+# deciding whether the change AGREES with them is the part only a reader can do.
+python3 - "$OUT" "$ROOT" <<'PY'
+import json, os, re, sys, glob
+out, root = sys.argv[1], sys.argv[2]
+model = json.load(open(os.path.join(out, "diff-model.json")))["files"]
+changed = [f["path"] for f in model]
+# Conventions are a question about CODE. Folded prose and markdown would otherwise dominate both
+# the relevance ranking (every `docs/plans/*` path donates words) and the neighbour list.
+code = [f["path"] for f in model if not f["noise_kind"] and os.path.splitext(f["path"])[1] not in (".md", ".mdx")]
+changed_set, L = set(changed), []
+NAMES = ("CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", "CONVENTIONS.md", "GEMINI.md", ".cursorrules",
+         ".windsurfrules", ".editorconfig", ".github/copilot-instructions.md")
+dirs = {""}
+for p in changed:
+    d = os.path.dirname(p)
+    while d:
+        dirs.add(d); d = os.path.dirname(d)
+guides = [os.path.join(d, n) if d else n for d in sorted(dirs) for n in NAMES
+          if os.path.isfile(os.path.join(root, os.path.join(d, n) if d else n))]
+# Rank candidate rule documents by what they TALK ABOUT, not by what they are called. A repo can
+# carry a hundred skill files; ranking them on filename overlap surfaced a dozen unrelated ones
+# (every doc whose name shares a word with some path), which teaches the reader to skip the section.
+# A document that names a changed file or its directory is the one that governs it.
+STOP = {"src", "app", "lib", "test", "tests", "spec", "index", "types", "utils", "components", "features"}
+terms = {}
+for p in code:
+    base = os.path.splitext(os.path.basename(p))[0]
+    terms[p] = 3
+    if len(base) > 3 and base not in STOP: terms[base] = max(terms.get(base, 0), 2)
+    for d in os.path.dirname(p).split("/"):
+        if len(d) > 3 and d not in STOP: terms[d] = max(terms.get(d, 0), 1)
+def listing(pattern, cap=8):
+    hits = []
+    for p in glob.glob(os.path.join(root, pattern), recursive=True):
+        if not os.path.isfile(p): continue
+        try: text = open(p, encoding="utf-8", errors="replace").read(60000)
+        except OSError: continue
+        score = sum(w for t, w in terms.items() if t in text)
+        if score >= 3: hits.append((-score, os.path.relpath(p, root)))
+    return [h[1] for h in sorted(hits)[:cap]], max(0, len(hits) - cap)
+L.append("# Conventions in force. A `convention` finding cites one of these written rules, or 2+ of")
+L.append("# the neighbours below. No citation = taste, and taste is not a finding.")
+L.append("\n## Written guidelines governing the changed paths")
+L += [f"- {g}" for g in guides] or ["- (none found)"]
+for label, pattern in (("Skills / agent rules matching the changed paths", ".claude/skills/*/SKILL.md"),
+                       ("Agent rules matching the changed paths", ".claude/agents/*.md"),
+                       ("Cursor rules", ".cursor/rules/*"),
+                       ("Decision records matching the changed paths", "docs/adr/*.md")):
+    hits, more = listing(pattern)
+    if hits:
+        L.append(f"\n## {label} ({pattern})")
+        L += [f"- {h}" for h in hits] + ([f"- … {more} more"] if more else [])
+L.append("\n## Neighbours — same directory, NOT changed here (the local precedent)")
+for d in sorted({os.path.dirname(p) for p in code if os.path.dirname(p)})[:20]:
+    exts = {os.path.splitext(p)[1] for p in code if os.path.dirname(p) == d}
+    sib = [os.path.relpath(p, root) for p in sorted(glob.glob(os.path.join(root, d, "*")))
+           if os.path.isfile(p) and os.path.splitext(p)[1] in exts and os.path.relpath(p, root) not in changed_set]
+    if sib: L.append(f"- {d}/: " + ", ".join(os.path.basename(s) for s in sib[:6]) + (" …" if len(sib) > 6 else ""))
+open(os.path.join(out, "conventions.txt"), "w").write("\n".join(L) + "\n")
+PY
+
 echo "OUT=$OUT"

@@ -14,6 +14,8 @@ not explanations), and **human points, AI investigates** (a gut-flag is an order
 | **low** | — | Nice to know; collapsed by default. | Everything else you'd still mention. |
 
 When you exceed a cap, **demote the least irreversible item** — not the least interesting.
+Ranking between classes when the cap bites: irreversible damage (data, auth, money) > a structural
+convention divergence (it propagates — the next change copies it) > a localised correctness question.
 Rather than 5 criticals, produce 3 criticals and put the other two first in medium.
 Zero findings is a valid report. Say so plainly; the "Everything else" list carries the honesty.
 
@@ -22,24 +24,39 @@ Zero findings is a valid report. Say so plainly; the "Everything else" list carr
 1. **Divergence** — what the code does ≠ what it claims. Misleading names (`hint` holding a secret,
    `isValid` that also mutates), a "refactor" that changes behaviour, a helper doing more than its
    caller expects, scope beyond the task. Tag `divergence`.
-2. **Blast radius × reversibility** — migrations, data deletion, auth/permission checks, money,
+2. **Convention divergence** — the code contradicts a written rule or the local precedent: an
+   architecture/layering rule, a pattern every sibling file follows, a library or technology the
+   project standardised on (or deliberately does not use), a naming/error/logging convention.
+   **Critical when the divergence is structural** — a layer skipped, a second way to do something
+   the codebase already does one way, a dependency that duplicates an existing one — because it
+   *propagates*: the next change copies it, and only a human can say "deliberate new direction" or
+   "mistake". Localised or cosmetic → medium/low. Tag `convention`.
+   **A convention finding MUST cite its authority in `diverges_from`**: the rule
+   (`CLAUDE.md:161`, `docs/adr/0010-…md`) or **≥ 2 neighbours** that do it the other way
+   (`src/features/x/service/a.ts:44`). `$OUT/conventions.txt` lists the rule documents that govern
+   the changed paths and the untouched siblings in each changed directory — read it before judging.
+   Without a citation it is taste, and taste is not a finding: the validator rejects it.
+3. **Blast radius × reversibility** — migrations, data deletion, auth/permission checks, money,
    public API shapes, persisted formats, background jobs, retries. Tag `blast-radius`, `data`,
    `auth`, `api`, `money`.
-3. **PII / secrets flow** — a field renamed, wrapped, logged, serialised, sent, stored. Follow the
+4. **PII / secrets flow** — a field renamed, wrapped, logged, serialised, sent, stored. Follow the
    value, not the keyword. Tag `pii`, `secret`.
-4. **Confidence × blast-radius mismatch** — a big-impact change the author was *very* confident
+5. **Confidence × blast-radius mismatch** — a big-impact change the author was *very* confident
    about, or justified at length, deserves a second look precisely because of that. Tag `confidence`.
-5. **Author confession** — spots the implementer (you, in this session) was unsure of, guessed, or
+6. **Author confession** — spots the implementer (you, in this session) was unsure of, guessed, or
    could not exercise. Always at least medium. Tag `confession`.
-6. **Error paths and edges** — swallowed exceptions, new `catch {}`, defaults that hide failure,
+7. **Error paths and edges** — swallowed exceptions, new `catch {}`, defaults that hide failure,
    off-by-one at boundaries, time zones, concurrency, ordering. Tag `errors`, `concurrency`, `edge`.
-7. **Tests that prove less than they look** — tests asserting the mock, deleted/skipped tests,
+8. **Tests that prove less than they look** — tests asserting the mock, deleted/skipped tests,
    snapshot churn. Tag `tests`.
-8. **Intent gap** — an acceptance criterion with no visible implementation, or an implementation
+9. **Intent gap** — an acceptance criterion with no visible implementation, or an implementation
    with no criterion. Tag `intent`.
 
-Not a flag: style, naming taste, "could be simpler", anything a formatter/linter/type-checker already
-enforces, anything already in the folded noise. Put those in `low` only if they'd mislead a future reader.
+Not a flag: style and naming *taste*, "could be simpler", anything a formatter/linter/type-checker
+already enforces, anything already in the folded noise. Put those in `low` only if they'd mislead a
+future reader. The line between taste and signal #2 is the citation: "I would have written it the
+other way" is taste; "this is the only place in the codebase that does it this way, and `CLAUDE.md`
+says not to" is a finding.
 
 ## 3. Shape of a finding
 
@@ -50,6 +67,9 @@ enforces, anything already in the folded noise. Put those in `low` only if they'
 - `what` — 1–2 sentences of mechanism, optional. Lead with the question, not the lecture.
 - `file`, `lines` (new-side line or range), `hunks` (`["F3H2"]`) — the renderer fetches the code.
 - `tags` — from the list above; they become filter buttons and feed the learning loop.
+- `diverges_from` — required on a `convention` finding: the rule or the neighbours it contradicts,
+  as `path` / `path:line` strings, each with a short `why` when the path alone does not show it.
+  These render next to the finding, so the reviewer can open the rule and the code side by side.
 
 ## 4. Phases (altitude 1)
 
