@@ -114,6 +114,19 @@ button.fpath:active{border-color:var(--info)}
 .ck-out .st{font-family:var(--mono);font-size:.75rem;margin-bottom:.35rem}
 .ck-out .ok{color:#68d391}.ck-out .bad{color:#fc8181}
 .ck-out pre{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:.6rem;overflow:auto;max-height:16rem;font-family:var(--mono);font-size:.72rem;color:var(--fg2);white-space:pre-wrap;word-break:break-all}
+/* Verified tick — a real checkbox, sized for a thumb, in the header so a card can be ticked without
+   being expanded. 44px of tap target with an 18px box drawn inside it. */
+.ck-done{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;margin:-.6rem 0 -.6rem -.5rem;flex-shrink:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.ck-done input{position:absolute;opacity:0;width:0;height:0}
+.ck-done span{width:18px;height:18px;border:1.5px solid var(--line2);border-radius:5px;background:var(--bg2);display:block;position:relative;transition:background .12s,border-color .12s}
+.ck-done input:checked+span{background:#2f855a;border-color:#2f855a}
+.ck-done input:checked+span::after{content:"✓";position:absolute;inset:0;color:#fff;font-size:.72rem;line-height:18px;text-align:center}
+.ck-done input:focus-visible+span{outline:2px solid var(--info);outline-offset:2px}
+.card.ck.done{opacity:.62}
+.card.ck.done .card-h .title{text-decoration:line-through;text-decoration-color:var(--fg3)}
+.ck-mark{margin-top:.7rem;border-top:1px solid var(--line);padding-top:.6rem}
+.ck-mark textarea{width:100%;font:inherit;font-size:.85rem;background:var(--bg2);color:var(--fg);border:1px solid var(--line2);border-radius:8px;padding:.5rem .7rem;min-height:44px;resize:vertical}
+.ck-mark textarea.has{border-color:var(--crit)}
 .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:.3rem;vertical-align:-2px}
 .map{background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);padding:.5rem;overflow:auto;-webkit-overflow-scrolling:touch}
 .map svg{height:auto;display:block;margin:0 auto}
@@ -303,6 +316,48 @@ __BODY__
   // chips, phase paths, the uncommitted list — opens that file's changes, and anything added later
   // inherits it by carrying the attribute.
   document.addEventListener('click', ev => { const c = ev.target.closest('[data-open]'); if (c) { ev.preventDefault(); ev.stopPropagation(); openSheet(c.dataset.open); } });
+
+  // ---- How to check: verified ticks + "didn't work" notes ------------------------------------
+  // Replayed from the event log rather than kept in a second store, same as the finding buttons:
+  // one source of truth means a reload cannot disagree with what was actually reported.
+  const ckState = new Map(), ckNote = new Map();
+  fb.forEach(e => {
+    if (e.type === 'check_verified' && e.check) ckState.set(e.check, true);
+    if (e.type === 'undo' && e.undo === 'check_verified' && e.check) ckState.set(e.check, false);
+    if (e.type === 'check_note' && e.check) ckNote.set(e.check, e.text || '');
+  });
+  const ckCount = $('#ck-count');
+  const refreshCount = () => {
+    if (!ckCount) return;
+    const done = $$('.card.ck .ck-done input').filter(i => i.checked).length;
+    ckCount.textContent = done + ' of ' + ckCount.dataset.total + ' verified';
+  };
+  $$('.card.ck').forEach(card => {
+    const id = card.dataset.id;
+    const box = $('.ck-done input', card), ta = $('.ck-mark textarea', card);
+    if (box) {
+      box.checked = !!ckState.get(id);
+      card.classList.toggle('done', box.checked);
+      box.addEventListener('change', () => {
+        card.classList.toggle('done', box.checked);
+        if (box.checked) event('check_verified', null, {check: id});
+        else event('undo', null, {undo: 'check_verified', check: id});
+        refreshCount();
+        toast(box.checked ? id + ' marked verified' : id + ' unmarked');
+      });
+    }
+    if (ta) {
+      const prior = ckNote.get(id); if (prior) { ta.value = prior; ta.classList.add('has'); }
+      ta.addEventListener('change', () => {
+        const text = ta.value.trim();
+        ta.classList.toggle('has', !!text);
+        if (text) { event('check_note', null, {check: id, text}); toast('Noted — Claude will see it'); }
+      });
+    }
+  });
+  refreshCount();
+  // A label in a collapsible header must not also toggle the card.
+  $$('.card.ck .ck-done').forEach(l => l.addEventListener('click', ev => ev.stopPropagation()));
 
   // ---- How to check: curl / Postman / inline send -------------------------------------------
   // The base URL is the reader's, not the author's: a report is read on a laptop, against a preview

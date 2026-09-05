@@ -125,6 +125,39 @@ def cmd_comments(a):
         print(f"   context:   {(r['context'] or '')[:200]!r}")
         print(f"   question:  {r['text']}")
 
+def cmd_notes(a):
+    """Everything the reader typed or ticked that is NOT a comment thread.
+
+    `comments` lists only ask-about-a-selection threads, so a note left on a finding card or a
+    how-to-check card is invisible to it — it reports "no open comments" while real feedback sits
+    unread in the file. That happened on the first report this shipped with, which is why this
+    exists: one command answering "did the reader say anything, anywhere?".
+    """
+    fb = _jsonl(os.path.join(a.dir, "feedback.jsonl"))
+    notes, verified, unmarked = [], set(), set()
+    for e in fb:
+        t = e.get("type")
+        if t == "note" and e.get("text"):
+            notes.append(("finding " + (e.get("finding") or "?"), e.get("ts"), e["text"]))
+        elif t == "check_note" and e.get("text"):
+            notes.append(("check " + (e.get("check") or "?"), e.get("ts"), e["text"]))
+        elif t == "check_verified" and e.get("check"):
+            verified.add(e["check"]); unmarked.discard(e["check"])
+        elif t == "undo" and e.get("undo") == "check_verified" and e.get("check"):
+            verified.discard(e["check"]); unmarked.add(e["check"])
+    latest = {}          # later events win: a note edited twice shows once, with its final text
+    for where, ts, text in notes: latest[where] = (ts, text)
+    if a.json:
+        print(json.dumps({"notes": [{"where": w, "ts": t, "text": x} for w, (t, x) in latest.items()],
+                          "verified": sorted(verified), "unmarked": sorted(unmarked)}, indent=2)); return
+    if verified: print("verified: " + ", ".join(sorted(verified)))
+    if unmarked: print("un-marked again: " + ", ".join(sorted(unmarked)))
+    if not latest:
+        print("no notes")
+        return
+    for where, (ts, text) in latest.items():
+        print(f"[{where}] {ts}\n   {text}")
+
 def cmd_answer(a):
     """Store an answer for a comment id AND log the question as a lesson (the report failed to pre-answer it)."""
     text = a.text if a.text is not None else sys.stdin.read()
@@ -202,6 +235,7 @@ def main():
     p = sp.add_parser("question"); p.add_argument("text"); p.add_argument("--dir", required=True); p.add_argument("--finding"); p.add_argument("--answered-by-reading"); p.set_defaults(fn=cmd_question)
     p = sp.add_parser("outcome"); p.add_argument("--dir", required=True); p.add_argument("--kind", required=True, choices=["missed", "false_positive", "confirmed", "severity_changed"]); p.add_argument("--finding", default="new"); p.add_argument("--text", required=True); p.add_argument("--file"); p.set_defaults(fn=cmd_outcome)
     p = sp.add_parser("comments"); p.add_argument("--dir", required=True); p.add_argument("--open", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_comments)
+    p = sp.add_parser("notes"); p.add_argument("--dir", required=True); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_notes)
     p = sp.add_parser("answer"); p.add_argument("--dir", required=True); p.add_argument("--id", required=True); p.add_argument("--text", help="answer text (markdown-lite: paragraphs, `code`); omit to read stdin"); p.add_argument("--improvement", help="one line: what the report should have said up front"); p.set_defaults(fn=cmd_answer)
     p = sp.add_parser("push"); p.add_argument("--since"); p.set_defaults(fn=cmd_push)
     p = sp.add_parser("digest"); p.add_argument("--since"); p.add_argument("--repo"); p.set_defaults(fn=cmd_digest)

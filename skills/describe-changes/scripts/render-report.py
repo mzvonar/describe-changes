@@ -206,10 +206,16 @@ def check_card(c):
                + '<div class="fb"><button data-act="curl">Copy as curl</button>'
                  f'<button data-act="send" class="{"danger" if mutating else ""}">▶ Send{" (writes)" if mutating else ""}</button></div>'
                + '<div class="ck-out"></div></div>')
+    # The tick lives in the HEADER so a card can be marked without expanding it — on a second pass a
+    # reviewer is confirming a list, not re-reading it. The note lives in the body, next to the steps
+    # it is about.
     return (f'<div class="card ck" data-id="{E(c["id"])}"><div class="card-h"><span class="tw">▶</span>'
+            f'<label class="ck-done" title="Mark {E(c["id"])} verified"><input type="checkbox"><span></span></label>'
             f'<span class="pill check">{E(c["id"])}</span>'
             f'<div class="title">{E(c["feature"])}<small>{E(SURFACE_LABEL.get(surface, surface))}</small></div></div>'
-            f'<div class="card-b">{where}{setup}<ol class="ck-steps">{steps}</ol>{expect}{api}{covered}</div></div>')
+            f'<div class="card-b">{where}{setup}<ol class="ck-steps">{steps}</ol>{expect}{api}{covered}'
+            '<div class="ck-mark"><textarea placeholder="Didn\'t work? What happened instead…"></textarea></div>'
+            '</div></div>')
 
 def postman_collection(items, name):
     """A Postman v2.1 collection of every runnable request in the report.
@@ -356,7 +362,7 @@ def main():
     checks = report.get("how_to_check") or []
     if checks:
         runnable = [c for c in checks if c.get("request")]
-        b.append(f'<section id="check"><h2>How to check <span class="cnt">{len(checks)} feature{"s" if len(checks) != 1 else ""} you can drive yourself</span></h2>')
+        b.append(f'<section id="check"><h2>How to check <span class="cnt" id="ck-count" data-total="{len(checks)}">0 of {len(checks)} verified</span></h2>')
         if runnable:
             b.append('<div class="ck-bar"><label for="base-url">Base URL</label>'
                      '<input id="base-url" type="url" spellcheck="false" placeholder="http://localhost:3000">'

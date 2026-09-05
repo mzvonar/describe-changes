@@ -173,6 +173,9 @@ grep -q 'id="check"' "$OUT/index.html" || fail "how-to-check section missing"
 grep -q 'Save a user that already exists' "$OUT/index.html" || fail "check steps missing"
 grep -q 'data-act="curl"' "$OUT/index.html" && grep -q 'data-act="send"' "$OUT/index.html" || fail "api run controls missing"
 grep -q 'id="dl-postman"' "$OUT/index.html" || fail "postman download missing"
+grep -q 'class="ck-done"' "$OUT/index.html" || fail "verified checkbox missing"
+grep -q 'class="ck-mark"><textarea placeholder=' "$OUT/index.html" || fail "check note box missing"
+grep -q 'id="ck-count" data-total="2"' "$OUT/index.html" || fail "verified counter missing"
 python3 - "$OUT/index.html" <<'PY' || fail "postman collection is not usable"
 import json, re, sys
 h = open(sys.argv[1]).read()
@@ -230,6 +233,16 @@ python3 "$S/feedback.py" comments --dir "$OUT" --open | grep -q 'no open comment
 python3 "$S/render-report.py" --dir "$OUT" >/dev/null
 grep -q 'id="t-cabc"' "$OUT/index.html" && grep -q '<code>db.upsert</code>' "$OUT/index.html" || fail "thread/answer not rendered"
 python3 "$S/feedback.py" digest | grep -q 'improvement: name the persistence' || fail "digest improvement"
+# notes: check ticks + "didn't work" text are readable. `comments` is blind to both by design, so a
+# reader's note used to sit unread while the tooling reported "no open comments".
+printf '%s\n' '{"ts":"2026-01-01T00:00:04Z","type":"check_verified","check":"V1"}' >> "$OUT/feedback.jsonl"
+printf '%s\n' '{"ts":"2026-01-01T00:00:05Z","type":"check_note","check":"V2","text":"401 instead of 200"}' >> "$OUT/feedback.jsonl"
+printf '%s\n' '{"ts":"2026-01-01T00:00:06Z","type":"note","finding":"C1","text":"intended, ship it"}' >> "$OUT/feedback.jsonl"
+python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'verified: V1' || fail "notes: verified tick not reported"
+python3 "$S/feedback.py" notes --dir "$OUT" | grep -q '401 instead of 200' || fail "notes: check note not reported"
+python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'intended, ship it' || fail "notes: finding note not reported"
+printf '%s\n' '{"ts":"2026-01-01T00:00:07Z","type":"undo","undo":"check_verified","check":"V1"}' >> "$OUT/feedback.jsonl"
+python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'un-marked again: V1' || fail "notes: untick not reported"
 # scope: branch mode includes commits + uncommitted; --check detects a moved tree; --committed-only excludes
 git commit -qm "wip" && git checkout -qb feat/x && echo 'export const z = 1' > src/z.ts && git add src/z.ts && echo 'export const y = 2' > src/y.ts
 OUT2="$(bash "$S/collect-diff.sh" --base main | tail -1 | sed 's/^OUT=//')"
