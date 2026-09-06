@@ -177,10 +177,18 @@ un-ticked), the commits that landed in between, the scope delta. Identical state
 twice, so re-rendering while you edit does not bury the version the reader actually read.
 
 The same delta is also a **page of its own**: `delta-<seq>.html` per earlier snapshot (`delta.html`
-is the newest), each with the full cards — code sheets, ticks, feedback all working — plus a picker
-across the snapshots and a link back to the whole report. Point a returning reader at `/delta.html`
-and someone who has been away longer at the oldest one, which is the entire arc since the first
-description. Ticks are shared: a check verified on a delta page is verified on the report.
+is the newest), plus a picker across them and a link back to the whole report. Point a returning
+reader at `/delta.html` and someone who has been away longer at the oldest one, which is the entire
+arc since the first description. Ticks are shared — a check verified on a delta page is verified on
+the report.
+
+Each of those pages is a **real report over the code between that reading and now**: its own diff,
+map, phases, folded noise and file store, built by running the ordinary pipeline against the tree
+the snapshot froze (`refs/describe-changes/…`, written through a throwaway index — your index and
+worktree are never touched). Findings and checks are the current report's, filtered to that range;
+they keep `file`/`lines` but lose `hunks`, because a hunk id belongs to the model it was computed
+in. When the range cannot be built — a snapshot older than tree refs, or no code moved — the page
+falls back to the delta's cards alone, and still names what moved.
 
 ```bash
 python3 "$S/snapshots.py" list --dir "$OUT"                      # what versions exist

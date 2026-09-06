@@ -86,11 +86,57 @@ def cmd_save(a):
             "saved_at": meta.get("generated_at") or "",
             "head_sha": meta.get("head_sha", ""), "range_label": meta.get("range_label", ""),
             "uncommitted": len(meta.get("uncommitted_files") or []),
+            "tree_sha": tree_commit(meta.get("root"), os.path.basename(d.rstrip("/")), seq,
+                                    exclude=[os.path.relpath(d, meta["root"])] if meta.get("root") else []),
             "stats": model.get("stats", {}), "fingerprint": fp}
     json.dump(info, open(os.path.join(dest, "snapshot.json"), "w"), indent=2)
     for old in list_snapshots(d)[:-KEEP]:
         shutil.rmtree(os.path.join(snap_dir(d), old["name"]), ignore_errors=True)
     print(f"snapshot {name} saved" + (f" ({a.label})" if a.label else ""))
+
+def _git(root, *args, **kw):
+    try:
+        r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=60, **kw)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+
+def tree_commit(root, slug, seq, exclude=()):
+    """Freeze the worktree — tracked, staged and untracked alike — as a real commit, on a private ref.
+
+    Without this a snapshot can only ever be compared as PROSE: `head_sha` describes the last commit,
+    and the uncommitted work a report mostly consists of leaves no trace once it is edited. A commit
+    built through a throwaway index touches neither the user's index nor their worktree, and the ref
+    (`refs/describe-changes/…`) keeps the object alive against gc while staying out of branches,
+    tags and pushes. This is what lets a later reading diff CODE against an earlier reading.
+    """
+    if not root or not os.path.isdir(os.path.join(root, ".git")):
+        return None
+    head = _git(root, "rev-parse", "HEAD")
+    if not head:
+        return None
+    idx = os.path.join(root, ".git", f"dc-index-{seq}")
+    env = dict(os.environ, GIT_INDEX_FILE=idx)
+    try:
+        if _git(root, "read-tree", head, env=env) is None: return None
+        if _git(root, "add", "-A", env=env) is None: return None
+        # The report's own output is not the user's change: without this the frozen tree swallows
+        # `.describe-changes/**` and the delta between two readings is mostly its own artifacts.
+        # Dropped from the index AFTER the add rather than excluded by pathspec — `git add` fails
+        # outright when an exclude pathspec names a gitignored path, which is the normal case.
+        for x in (".describe-changes", *exclude):
+            _git(root, "rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", x, env=env)
+        tree = _git(root, "write-tree", env=env)
+        if not tree: return None
+        commit = _git(root, "commit-tree", tree, "-p", head, "-m", f"describe-changes snapshot {seq}",
+                      env=dict(env, GIT_AUTHOR_NAME="describe-changes", GIT_AUTHOR_EMAIL="dc@local",
+                               GIT_COMMITTER_NAME="describe-changes", GIT_COMMITTER_EMAIL="dc@local"))
+        if not commit: return None
+        _git(root, "update-ref", f"refs/describe-changes/{slug}/{seq:03d}", commit)
+        return commit
+    finally:
+        try: os.remove(idx)
+        except OSError: pass
 
 def _commits_between(root, a_sha, b_sha):
     if not root or not a_sha or not b_sha or a_sha == b_sha:
@@ -163,6 +209,89 @@ def compute_delta(before, after):
         "stats_before": sb, "stats_after": sa,
         "summary_changed": (rb.get("summary") or "") != (ra.get("summary") or ""),
     }
+
+def build_code_delta(d, snap, report, dl):
+    """A REAL report over the code between a snapshot and now — its own diff, folds, map and stats.
+
+    The filtered-cards page answers "which findings moved"; this answers "show me what changed",
+    which is the question a reviewer actually returns with. It is the ordinary pipeline pointed at a
+    narrower range: collect-diff over `<snapshot tree>..<now>`, then a report.json whose narrative is
+    the current report's, filtered to what that range contains. Findings keep `file`/`lines` but lose
+    `hunks` — hunk ids belong to the model they were computed in, and a stale id opens the wrong code.
+
+    Returns the delta report dir, or None when the range cannot be built (a snapshot taken before
+    tree refs existed, a repo that has moved on, nothing changed).
+    """
+    root = (snap.get("meta") or {}).get("root")
+    a_sha = (snap.get("info") or {}).get("tree_sha")
+    if not root or not a_sha or _git(root, "cat-file", "-e", a_sha + "^{commit}") is None:
+        return None
+    seq = (snap.get("info") or {}).get("seq", 0)
+    b_sha = (tree_commit(root, os.path.basename(d.rstrip("/")) + "-now", 999,
+                         exclude=[os.path.relpath(d, root)]) or _git(root, "rev-parse", "HEAD"))
+    if not b_sha or a_sha == b_sha:
+        return None
+    out = os.path.join(d, "deltas", f"{seq:03d}")
+    collect = os.path.join(os.path.dirname(os.path.abspath(__file__)), "collect-diff.sh")
+    r = subprocess.run(["bash", collect, "--out", out, a_sha, b_sha], capture_output=True, text=True, cwd=root)
+    if r.returncode != 0:                       # exit 2 = the two trees are identical
+        return None
+    model = _read(os.path.join(out, "diff-model.json"), {})
+    files = {f["path"] for f in model.get("files", [])}
+    if not files:
+        return None
+    # This range already CONTAINS the uncommitted work (both ends are frozen trees), so the repo's
+    # "still uncommitted" list is not a fact about this page — and rendering it would offer file
+    # chips for paths outside the range, which open nothing.
+    dmeta = _read(os.path.join(out, "meta.json"), {})
+    dmeta["uncommitted_files"] = []
+    dmeta["range_label"] = f"since {(snap.get('info') or {}).get('label') or (snap.get('info') or {}).get('name','the last reading')}"
+    json.dump(dmeta, open(os.path.join(out, "meta.json"), "w"), indent=2)
+
+    fin_by_id = {f["id"]: f for f in report.get("findings", [])}
+    moved_ids = [f["id"] for f in dl["findings_added"]] + [c["id"] for c in dl["findings_changed"]]
+    keep = [fin_by_id[i] for i in moved_ids if i in fin_by_id]
+    keep += [f for f in report.get("findings", [])
+             if f.get("file") in files and f["id"] not in moved_ids]
+    findings = [{k: v for k, v in f.items() if k != "hunks"} for f in keep]
+    chk_by_id = {c["id"]: c for c in (report.get("how_to_check") or [])}
+    checks = [chk_by_id[c["id"]] for c in dl["checks_reworded"] + dl["checks_added"] if c["id"] in chk_by_id]
+
+    graph = report.get("graph") or {}
+    nodes = [n for n in graph.get("nodes", []) if not n.get("file") or n["file"] in files]
+    node_ids = {n["id"] for n in nodes}
+    edges = [e for e in graph.get("edges", []) if e.get("from") in node_ids and e.get("to") in node_ids]
+    if len(nodes) < 2:
+        nodes, edges = [], []
+    phases = []
+    for p in report.get("phases", []):
+        inside = [f for f in p.get("files", []) if f in files]
+        if inside:
+            phases.append(dict(p, files=inside))
+
+    label = (snap.get("info") or {}).get("label") or (snap.get("info") or {}).get("name", "the last reading")
+    st = model.get("stats", {})
+    bits = []
+    if dl["commits"]: bits.append(f"{len(dl['commits'])} commit{'s' if len(dl['commits']) != 1 else ''}")
+    bits.append(f"{st.get('files_substantive', len(files))} file{'s' if st.get('files_substantive', 1) != 1 else ''} with substantive changes")
+    if dl["findings_resolved"]: bits.append(f"{len(dl['findings_resolved'])} finding{'s' if len(dl['findings_resolved']) != 1 else ''} resolved")
+    if dl["findings_added"]: bits.append(f"{len(dl['findings_added'])} new")
+    delta_report = {
+        "title": f"{report.get('title', 'Changes')} — since {label}",
+        "intent": f"Only what changed since {label}. The whole change is in the full report.",
+        "summary": "This page is the code that moved since that reading: " + ", ".join(bits)
+                   + ". Findings and checks are the ones that concern it; everything settled before "
+                     "that reading is deliberately absent.",
+        "phases": phases,
+        "graph": {"narrative": (graph.get("narrative") or "") and f"{graph['narrative']} (scoped to what changed since {label})",
+                  "nodes": nodes, "edges": edges},
+        "findings": findings,
+        "how_to_check": checks,
+        "folded": model.get("folds", []),
+        "unreviewed_notes": {k: v for k, v in (report.get("unreviewed_notes") or {}).items() if k in files},
+    }
+    json.dump(delta_report, open(os.path.join(out, "report.json"), "w"), ensure_ascii=False, indent=2)
+    return out
 
 def _resolve(d, which, default_last=True):
     snaps = list_snapshots(d)

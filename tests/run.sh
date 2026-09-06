@@ -446,6 +446,10 @@ r["findings"] = [dict(r["findings"][0], id="M1", severity="medium",
 r["how_to_check"][0]["steps"] = ["Open /users.", "Save a user that already exists.", "Reload."]
 json.dump(r, open(p, "w"))
 PY
+# …and REAL code moves between the two readings, which is what the delta page is for.
+printf 'export function afterTheFirstRead(x: number) {\n  return x * 2;\n}\n' >> src/api/users.ts
+git add -A
+bash "$S/collect-diff.sh" --staged --out "$OUT" >/dev/null
 python3 "$S/render-report.py" --dir "$OUT" >/dev/null
 DELTA="$(python3 "$S/snapshots.py" diff --dir "$OUT" --from first --to last)"
 case "$DELTA" in *"Findings changed"*) ;; *) fail "a re-worded finding must read as changed, not as one gone + one new: $DELTA" ;; esac
@@ -457,14 +461,24 @@ python3 "$S/snapshots.py" list --dir "$OUT" | grep -q "002-" || fail "the change
 [ -f "$OUT/delta.html" ] && [ -f "$OUT/delta-001.html" ] || fail "no delta page was written"
 grep -q "what moved since" "$OUT/delta-001.html" || fail "the delta page has no header"
 grep -q 'href="index.html"' "$OUT/delta-001.html" || fail "the delta page must link back to the full report"
-python3 - "$OUT/delta-001.html" <<'PY' || fail "the delta page has dead controls or is not scoped"
-import json, re, sys
-h = open(sys.argv[1]).read()
+# It is a REAL report over the range between the two readings — its own diff, folds and map — not a
+# list of what moved. Built by running the ordinary pipeline against the snapshot's frozen tree.
+[ -f "$OUT/deltas/001/diff-model.json" ] || fail "no code delta was collected between the snapshots"
+python3 - "$OUT/delta-001.html" "$OUT" <<'PY' || fail "the delta page is not a scoped, live report"
+import json, os, re, sys
+h, d = open(sys.argv[1]).read(), sys.argv[2]
 store = json.loads(re.search(r'id="file-store">(.*?)</script>', h, re.S).group(1).replace("<\\/", "</"))
 dead = sorted(set(re.findall(r'data-open="([^"]+)"', h)) - set(store))
-full = len(open(sys.argv[1].replace("delta-001.html", "index.html")).read())
-ok = not dead and len(h) < full          # scoped stores: a delta page is not the whole report again
-print("delta page OK" if ok else f"FAIL dead={dead} size={len(h)} full={full}")
+model = json.load(open(os.path.join(d, "deltas/001/diff-model.json")))
+full = json.load(open(os.path.join(d, "diff-model.json")))
+narrower = {f["path"] for f in model["files"]} < {f["path"] for f in full["files"]}
+# The full-report sections only a real render emits, and code for the files in THIS range:
+# `<div class="diff">` lives inside the file-store JSON, so look for it there, not in the markup.
+has_code = ('id="folded"' in h and 'id="unreviewed"' in h
+            and any('<div class="diff">' in v.get("html", "") for v in store.values()))
+scoped = set(store) == {f["path"] for f in model["files"]}
+ok = not dead and narrower and has_code and scoped
+print("delta page OK" if ok else f"FAIL dead={dead} narrower={narrower} code={has_code} scoped={scoped}")
 sys.exit(0 if ok else 1)
 PY
 # A third state: now TWO earlier snapshots exist, so the reader can pick which reading to diff from.

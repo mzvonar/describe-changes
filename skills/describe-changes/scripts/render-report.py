@@ -6,7 +6,7 @@ The LLM never writes HTML: it writes report.json (see reference/report-schema.md
 pulls code snippets straight from raw.diff by hunk id, builds the mermaid map, and lays out the
 cards. Deterministic: same inputs → same HTML.
 """
-import argparse, html, json, os, re, sys, hashlib
+import argparse, html, json, os, re, shutil, subprocess, sys, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import importlib.util
 import snapshots
@@ -538,6 +538,9 @@ def main():
     ap.add_argument("--dir", required=True); ap.add_argument("--template"); ap.add_argument("--out")
     ap.add_argument("--no-snapshot", action="store_true", help="render without recording a snapshot")
     ap.add_argument("--no-delta-pages", action="store_true", help="skip the per-snapshot delta pages")
+    ap.add_argument("--picker", help="HTML nav injected into the header (used by the delta pages)")
+    ap.add_argument("--subtitle", help="override the header subtitle (used by the delta pages)")
+    ap.add_argument("--report-id", help="share the parent report's feedback bucket")
     ap.add_argument("--snapshot-label", help="name this snapshot (e.g. 'first pass', 'after review fixes')")
     a = ap.parse_args()
     d = a.dir
@@ -555,7 +558,7 @@ def main():
     # Deliberately NOT keyed on head_sha: report_id is the browser's localStorage bucket, and one
     # more commit on the branch would otherwise orphan every tick, vote and note the reader left.
     # The branch's report is one continuous conversation, however many times it is re-rendered.
-    report_id = report.get("report_id") or hashlib.md5(
+    report_id = a.report_id or report.get("report_id") or hashlib.md5(
         (meta.get("repo", "") + "|" + (meta.get("branch") or meta.get("range_label", ""))).encode()).hexdigest()[:10]
     title = report["title"]
     tags = sorted({t for f in findings for t in f.get("tags", [])})
@@ -569,7 +572,8 @@ def main():
         scope = f' · {meta.get("commits", 0)} commits' + (f' + <b style="color:var(--med)">{len(unc)} uncommitted files</b>' if unc else " · tree clean")
     elif meta.get("mode") == "worktree":
         scope = f' · {len(unc)} uncommitted files'
-    b.append(f'<header class="top"><h1>{E(title)}</h1><div class="sub">{E(meta.get("repo",""))} · {E(meta.get("range_label", report.get("range","")))}{scope}</div>')
+    sub = E(a.subtitle) if a.subtitle else f'{E(meta.get("repo",""))} · {E(meta.get("range_label", report.get("range","")))}{scope}'
+    b.append(f'<header class="top"><h1>{E(title)}</h1><div class="sub">{sub}</div>' + (a.picker or ""))
     b.append('<div class="chips">'
              + (f'<span class="chip crit"><i class="dot"></i>{counts["critical"]} critical</span>' if counts["critical"] else "")
              + (f'<span class="chip med"><i class="dot"></i>{counts["medium"]} medium</span>' if counts["medium"] else "")
@@ -771,13 +775,31 @@ def main():
             picks = "".join(chip(x, s["seq"]) for x in cands)
             picker = (f'<div class="picker"><span class="pl">Compare from</span>{picks}'
                       f'<a class="pick full" href="index.html">the full report →</a></div>')
-            page = delta_page(bef, dl_i, report, hunks, store, tpl,
-                              f'{title} — since {s.get("label") or s["name"]}', report_id, prior, picker, meta)
             p = os.path.join(d, f"delta-{s['seq']:03d}.html")
-            open(p, "w").write(page)
+            # Preferred: a REAL report over the code between that reading and now — its own diff,
+            # map, folds and file store. Falls back to the filtered-cards page when the range cannot
+            # be built (a snapshot older than tree refs, or no code moved at all).
+            sub = snapshots.build_code_delta(d, bef, report, dl_i)
+            if sub:
+                sub_prior = os.path.join(d, "feedback.jsonl")
+                if os.path.exists(sub_prior):
+                    shutil.copyfile(sub_prior, os.path.join(sub, "feedback.jsonl"))
+                bits = [f'what moved since {snapshots.render_text(dl_i).splitlines()[0][6:]}']
+                if dl_i["uncommitted_now"]: bits.append(f'{dl_i["uncommitted_now"]} file(s) uncommitted')
+                rc = subprocess.run([sys.executable, os.path.abspath(__file__), "--dir", sub, "--out", p,
+                                     "--no-snapshot", "--no-delta-pages", "--picker", picker,
+                                     "--subtitle", " · ".join(bits),
+                                     "--report-id", report_id], capture_output=True, text=True)
+                if rc.returncode != 0:
+                    sub = None
+                    print(f"  delta {s['seq']:03d}: code-scoped render failed, falling back — {rc.stderr.strip()[:200]}", file=sys.stderr)
+            if not sub:
+                open(p, "w").write(delta_page(bef, dl_i, report, hunks, store, tpl,
+                                              f'{title} — since {s.get("label") or s["name"]}',
+                                              report_id, prior, picker, meta))
             written.append(p)
             if s is cands[-1]:
-                open(os.path.join(d, "delta.html"), "w").write(page)
+                shutil.copyfile(p, os.path.join(d, "delta.html"))
 
     # Snapshot AFTER rendering, so the delta above compares against what the reader last saw rather
     # than against the version being written now. Identical states are not saved twice.
