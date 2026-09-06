@@ -59,6 +59,8 @@ def main():
     print(f"│  Local:      http://localhost:{a.port}/")
     if lan: print(f"│  LAN:        http://{lan}:{a.port}/")
     if ts:  print(f"│  Tailscale:  http://{ts}:{a.port}/")
+    if os.path.exists(os.path.join(d, "delta.html")):
+        print(f"│  Since last: http://localhost:{a.port}/delta.html   (what moved; picker for earlier snapshots)")
     print(f"│  Feedback →  {fb_path}")
     print(f"│  PID {os.getpid()} — stop with: kill {os.getpid()}")
     print("└──────────────────────────────────────────────────────────────", flush=True)

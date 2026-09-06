@@ -176,6 +176,12 @@ If the `Artifact` tool is available and the user is remote, you may also publish
 un-ticked), the commits that landed in between, the scope delta. Identical states are not saved
 twice, so re-rendering while you edit does not bury the version the reader actually read.
 
+The same delta is also a **page of its own**: `delta-<seq>.html` per earlier snapshot (`delta.html`
+is the newest), each with the full cards — code sheets, ticks, feedback all working — plus a picker
+across the snapshots and a link back to the whole report. Point a returning reader at `/delta.html`
+and someone who has been away longer at the oldest one, which is the entire arc since the first
+description. Ticks are shared: a check verified on a delta page is verified on the report.
+
 ```bash
 python3 "$S/snapshots.py" list --dir "$OUT"                      # what versions exist
 python3 "$S/snapshots.py" diff --dir "$OUT" --from first         # the whole arc since the first read

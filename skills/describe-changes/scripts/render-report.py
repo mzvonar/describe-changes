@@ -198,26 +198,32 @@ VIEWS = {"screen": view_screen, "flow": view_flow, "adoption": view_adoption}
 
 SURFACE_LABEL = {"ui": "screen", "api": "API", "cli": "command"}
 
-def delta_section(d, report, meta, model):
-    """What moved since the last snapshot — the returning reader's whole question, answered up top.
+def pick_delta(d, report, meta, model):
+    """The snapshot a returning reader should be compared against, and the delta to it.
 
-    Silent on a first render (there is nothing to compare), and silent when nothing changed: a
-    section that always appears and usually says "no change" trains the reader to skip it.
+    The newest snapshot is usually THIS state (the previous render saved it), and diffing a state
+    against itself would blank the answer on every re-render — including the one the reader reloads
+    to see what changed. Compare against the last snapshot that actually says something different.
     """
     snaps = snapshots.list_snapshots(d)
     if not snaps:
-        return ""
-    # The newest snapshot is usually THIS state (the previous render saved it), and diffing a state
-    # against itself would blank the section on every re-render — including the one the reader
-    # reloads to see what changed. Compare against the last snapshot that actually says something
-    # different, so the answer to "what moved" survives until something moves again.
+        return None, None
     fp_now = snapshots._fingerprint(report, meta)
     older = [s for s in snaps if s.get("fingerprint") != fp_now]
     if not older:
-        return ""
+        return None, None
     before = snapshots.load_snapshot(d, older[-1]["name"])
-    after = {"info": {"name": "now"}, "report": report, "meta": meta, "model": model}
-    dl = snapshots.compute_delta(before, after)
+    return before, snapshots.compute_delta(before, {"info": {"name": "now"}, "report": report,
+                                                    "meta": meta, "model": model})
+
+def delta_section(before, dl, has_page=False):
+    """What moved since the last snapshot — the returning reader's whole question, answered up top.
+
+    Silent when nothing changed: a section that always appears and usually says "no change" trains
+    the reader to skip it.
+    """
+    if not dl:
+        return ""
     rows = []
     def group(cls, title, items, fmt):
         if items:
@@ -249,14 +255,101 @@ def delta_section(d, report, meta, model):
         rows.append('<div class="dl-g"><b>The summary was rewritten</b><ul><li>read the header again</li></ul></div>')
     if not rows:
         return ""
-    when = (before.get("info") or {}).get("saved_at") or ""
-    head = f'{E(dl["from"])}{(" · " + E(when[:16])) if when else ""}'
+    head = delta_head(before, dl)
+    link = ('<div class="dl-more"><a href="delta.html">Open this as its own page — with the code, '
+            'and a picker for any earlier snapshot →</a></div>') if has_page else ""
+    return (f'<section id="since"><h2>Since you last read this <span class="cnt">{head}</span></h2>'
+            f'<div class="card open delta"><div class="card-b">{"".join(rows)}{link}</div></div></section>')
+
+def delta_head(before, dl):
+    info = before.get("info") or {}
+    when = info.get("saved_at") or ""
+    head = f'{E(info.get("label") or dl["from"])}{(" · " + E(when[:16])) if when else ""}'
     if dl["from_head"] and dl["to_head"] and dl["from_head"] != dl["to_head"]:
         head += f' · <code>{E(dl["from_head"])} → {E(dl["to_head"])}</code>'
     elif dl["uncommitted_now"]:
         head += f' · {dl["uncommitted_now"]} file(s) still uncommitted'
-    return (f'<section id="since"><h2>Since you last read this <span class="cnt">{head}</span></h2>'
-            f'<div class="card open delta"><div class="card-b">{"".join(rows)}</div></div></section>')
+    return head
+
+def delta_page(before, dl, report, hunks, file_store, tpl, title, report_id, prior, picker, meta):
+    """The delta as a page of its own: the same cards as the report, filtered to what moved.
+
+    Not a re-diff of the code between snapshots — the findings and checks ARE the delta, and they
+    already point into this report's hunks, so reusing them keeps every code sheet and every tick
+    working exactly as on the main page. The stores are scoped to the files these cards mention, so
+    a delta page is tens of KB rather than the whole report again.
+    """
+    fin_by_id = {f["id"]: f for f in report["findings"]}
+    chk_by_id = {c["id"]: c for c in (report.get("how_to_check") or [])}
+    added = [fin_by_id[f["id"]] for f in dl["findings_added"] if f["id"] in fin_by_id]
+    changed = [(fin_by_id[c["id"]], c) for c in dl["findings_changed"] if c["id"] in fin_by_id]
+    checks = [chk_by_id[c["id"]] for c in dl["checks_reworded"] + dl["checks_added"] if c["id"] in chk_by_id]
+    counts = {"new": len(added), "changed": len(changed), "resolved": len(dl["findings_resolved"]), "checks": len(checks)}
+
+    b = [f'<header class="top"><h1>{E(title)}</h1>'
+         f'<div class="sub">what moved since {delta_head(before, dl)}</div>'
+         f'<div class="chips"><span class="chip">{counts["new"]} new</span>'
+         f'<span class="chip">{counts["changed"]} changed</span>'
+         f'<span class="chip">{counts["resolved"]} resolved</span>'
+         f'<span class="chip">{counts["checks"]} check{"s" if counts["checks"] != 1 else ""} to re-run</span></div>'
+         f'{picker}</header>']
+    if dl["commits"]:
+        b.append('<section id="landed"><h2>Work landed since <span class="cnt">'
+                 f'{len(dl["commits"])} commit{"s" if len(dl["commits"]) != 1 else ""}</span></h2>'
+                 '<div class="card open"><div class="card-b"><ul class="refs">'
+                 + "".join(f'<li><code>{E(c)}</code></li>' for c in dl["commits"][:40]) + '</ul></div></div></section>')
+    sb, sa = dl["stats_before"] or {}, dl["stats_after"] or {}
+    if sb and sa and (sb.get("files_substantive") != sa.get("files_substantive") or sb.get("noise_pct") != sa.get("noise_pct")):
+        b.append('<section id="scope"><h2>Scope</h2><div class="card open"><div class="card-b"><div class="narr">'
+                 f'{sb.get("files_substantive","?")} → {sa.get("files_substantive","?")} files to read · '
+                 f'{sb.get("noise_pct","?")}% → {sa.get("noise_pct","?")}% folded</div></div></div></section>')
+    if dl["findings_resolved"]:
+        # Titles only: the code behind a resolved finding is gone or changed, so a card would show
+        # the reader something that no longer exists. What they need is the closed list.
+        b.append(f'<section id="resolved"><h2>Resolved <span class="cnt">no longer in the report</span></h2>'
+                 '<div class="card open delta"><div class="card-b"><div class="dl-g"><ul>'
+                 + "".join(f'<li><span class="pill {E(f["severity"])}">{E(f["id"])}</span> {E(f["title"])}'
+                           f'<span class="dim"> · {E(f["file"])}</span></li>' for f in dl["findings_resolved"])
+                 + '</ul></div></div></div></section>')
+    if added:
+        b.append('<section id="findings"><h2>New findings <span class="cnt">not in the version you read</span></h2>')
+        b.extend(finding_card(f, hunks) for f in added)
+        b.append("</section>")
+    if changed:
+        b.append('<section id="changed"><h2>Changed findings <span class="cnt">same place, different claim or rating</span></h2>')
+        for f, c in changed:
+            was = (f'<div class="fnote">was <span class="pill {E(c["was_severity"])}">{E(c["was_id"] or "?")}</span> '
+                   f'{E(c["was_title"] or "")}</div>')
+            b.append(finding_card(f, hunks).replace('<div class="card-b">', '<div class="card-b">' + was, 1))
+        b.append("</section>")
+    if checks:
+        b.append('<section id="check"><h2>Checks to re-run <span class="cnt" id="ck-count" '
+                 f'data-total="{len(checks)}">0 of {len(checks)} verified</span></h2>'
+                 '<div class="ck-warn">These cards are new or re-written since your last read, so any tick '
+                 'on them was dropped — the steps are not the ones you ran.</div>')
+        b.extend(check_card(c) for c in checks)
+        b.append('<script type="application/json" id="check-store">'
+                 + json.dumps({c["id"]: c["request"] for c in checks if c.get("request")}).replace("</", "<\\/")
+                 + "</script>")
+        b.append("</section>")
+    if not (added or changed or checks or dl["findings_resolved"]):
+        b.append('<section><div class="empty">Nothing changed in the report since this snapshot.</div></section>')
+
+    # Scope the stores to what these cards can open — the whole-report store is most of a megabyte.
+    cited = {f["file"] for f in added} | {f["file"] for f, _ in changed}
+    cited |= {r["file"] for r in dl["findings_resolved"]}
+    cited |= {c["covered_by"] for c in checks if c.get("covered_by")}   # a check's regression-cover link opens too
+    small_store = {p: v for p, v in file_store.items() if p in cited}
+    b.append('<script type="application/json" id="file-store">' + json.dumps(small_store).replace("</", "<\\/") + '</script>')
+    b.append('<script type="application/json" id="hunk-store">{}</script>')
+    b.append('<div class="sheet-bg" id="sheet-bg"></div><div class="sheet" id="sheet"><div class="sheet-h">'
+             '<span class="sheet-t" id="sheet-t"></span><button class="btn" id="sheet-x">✕</button></div>'
+             '<div class="sheet-b" id="sheet-b"></div></div>')
+    data = {"report_id": report_id, "repo": meta.get("repo", ""), "range_label": meta.get("range_label", ""),
+            "prior": prior, "findings": [{"id": f["id"], "severity": f["severity"], "tags": f.get("tags", [])}
+                                         for f in added + [x for x, _ in changed]]}
+    return (tpl.replace("__TITLE__", E(title)).replace("__BODY__", "\n".join(b))
+               .replace("__DATA__", json.dumps(data).replace("</", "<\\/")))
 
 def check_card(c):
     """One shipped capability, with the steps to exercise it for real.
@@ -444,6 +537,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True); ap.add_argument("--template"); ap.add_argument("--out")
     ap.add_argument("--no-snapshot", action="store_true", help="render without recording a snapshot")
+    ap.add_argument("--no-delta-pages", action="store_true", help="skip the per-snapshot delta pages")
     ap.add_argument("--snapshot-label", help="name this snapshot (e.g. 'first pass', 'after review fixes')")
     a = ap.parse_args()
     d = a.dir
@@ -492,7 +586,8 @@ def main():
     # "Since you last read this" comes FIRST, and only when there is a previous snapshot. A report
     # read twice is answering a different question the second time — what moved — and making the
     # returning reader re-scan everything to find out is the same attention tax as an unfolded diff.
-    b.append(delta_section(d, report, meta, model))
+    before_snap, dl_now = pick_delta(d, report, meta, model)
+    b.append(delta_section(before_snap, dl_now, has_page=bool(dl_now) and not a.out and not a.no_delta_pages))
 
     # Intent leads, small and quiet — it FRAMES the summary instead of repeating it. Rendering it
     # after, as an equal-weight paragraph, is what made the two read as duplicates.
@@ -657,11 +752,39 @@ def main():
     out = tpl.replace("__TITLE__", E(title)).replace("__BODY__", "\n".join(b)).replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
     out_path = a.out or os.path.join(d, "index.html")
     open(out_path, "w").write(out)
+
+    # One delta page per earlier snapshot, each comparing THAT reading to now, plus a picker across
+    # them: the reader who left after the first description and the one who left after the review
+    # fixes are owed different pages, and neither should have to work out which. `delta.html` is the
+    # newest of them, which is what "since you last read this" links to; the oldest is the whole arc.
+    written = []
+    if not a.out and not a.no_delta_pages:
+        fp_now = snapshots._fingerprint(report, meta)
+        cands = [s for s in snapshots.list_snapshots(d) if s.get("fingerprint") != fp_now]
+        def chip(s, cur):
+            label = s.get("label") or s["name"]
+            return (f'<a class="pick{" on" if s["seq"] == cur else ""}" href="delta-{s["seq"]:03d}.html">'
+                    f'since {s["seq"]:03d} · {E(label)}</a>')
+        for s in cands:
+            bef = snapshots.load_snapshot(d, s["name"])
+            dl_i = snapshots.compute_delta(bef, {"info": {"name": "now"}, "report": report, "meta": meta, "model": model})
+            picks = "".join(chip(x, s["seq"]) for x in cands)
+            picker = (f'<div class="picker"><span class="pl">Compare from</span>{picks}'
+                      f'<a class="pick full" href="index.html">the full report →</a></div>')
+            page = delta_page(bef, dl_i, report, hunks, store, tpl,
+                              f'{title} — since {s.get("label") or s["name"]}', report_id, prior, picker, meta)
+            p = os.path.join(d, f"delta-{s['seq']:03d}.html")
+            open(p, "w").write(page)
+            written.append(p)
+            if s is cands[-1]:
+                open(os.path.join(d, "delta.html"), "w").write(page)
+
     # Snapshot AFTER rendering, so the delta above compares against what the reader last saw rather
     # than against the version being written now. Identical states are not saved twice.
     if not a.out and not a.no_snapshot:
         snapshots.cmd_save(argparse.Namespace(dir=d, label=a.snapshot_label))
-    print(f"rendered {out_path} ({len(out)//1024} KB): {counts['critical']}C/{counts['medium']}M/{counts['low']}L, {len(report['graph'].get('nodes', []))} map nodes")
+    print(f"rendered {out_path} ({len(out)//1024} KB): {counts['critical']}C/{counts['medium']}M/{counts['low']}L, {len(report['graph'].get('nodes', []))} map nodes"
+          + (f" · {len(written)} delta page{'s' if len(written) != 1 else ''}" if written else ""))
 
 if __name__ == "__main__":
     main()

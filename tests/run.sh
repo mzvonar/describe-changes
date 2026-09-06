@@ -453,6 +453,33 @@ case "$DELTA" in *"Checks re-written"*) ;; *) fail "an edited check must be call
 grep -q "Since you last read this" "$OUT/index.html" || fail "the delta is not rendered on the page"
 grep -q "a tick on these was dropped" "$OUT/index.html" || fail "the page must say why a tick vanished"
 python3 "$S/snapshots.py" list --dir "$OUT" | grep -q "002-" || fail "the changed render did not snapshot"
+# The delta is also a page of its own — one per earlier snapshot, with a picker across them.
+[ -f "$OUT/delta.html" ] && [ -f "$OUT/delta-001.html" ] || fail "no delta page was written"
+grep -q "what moved since" "$OUT/delta-001.html" || fail "the delta page has no header"
+grep -q 'href="index.html"' "$OUT/delta-001.html" || fail "the delta page must link back to the full report"
+python3 - "$OUT/delta-001.html" <<'PY' || fail "the delta page has dead controls or is not scoped"
+import json, re, sys
+h = open(sys.argv[1]).read()
+store = json.loads(re.search(r'id="file-store">(.*?)</script>', h, re.S).group(1).replace("<\\/", "</"))
+dead = sorted(set(re.findall(r'data-open="([^"]+)"', h)) - set(store))
+full = len(open(sys.argv[1].replace("delta-001.html", "index.html")).read())
+ok = not dead and len(h) < full          # scoped stores: a delta page is not the whole report again
+print("delta page OK" if ok else f"FAIL dead={dead} size={len(h)} full={full}")
+sys.exit(0 if ok else 1)
+PY
+# A third state: now TWO earlier snapshots exist, so the reader can pick which reading to diff from.
+python3 - "$OUT" <<'PY'
+import json, os, sys
+d = sys.argv[1]; p = os.path.join(d, "report.json"); r = json.load(open(p))
+r["findings"].append(dict(r["findings"][0], id="L1", severity="low", title="A third-pass note"))
+json.dump(r, open(p, "w"))
+PY
+python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+[ -f "$OUT/delta-002.html" ] || fail "a second earlier snapshot produced no page"
+for f in delta-001 delta-002; do   # -o, not -c: the picker is one line, and `grep -c` counts LINES
+  [ "$(grep -o 'class="pick' "$OUT/$f.html" | wc -l)" -ge 3 ] || fail "$f has no picker across both snapshots"
+done
+grep -q "since 002" "$OUT/delta-001.html" || fail "the picker must offer the other snapshot"
 echo "snapshots OK"
 git checkout -q "$OUT/report.json" 2>/dev/null || true
 

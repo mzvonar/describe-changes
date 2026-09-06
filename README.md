@@ -29,6 +29,8 @@ diff in → fold the noise → phases + visual map → the ~3 things a human mus
 - **Since you last read this** — a report is read again after the fixes land, and the second reading
   asks a different question. Every render snapshots the report; the next one opens with what moved:
   findings resolved / added / re-rated, checks re-written (so un-ticked), the commits in between.
+  The same delta is also a page of its own (`delta.html`, plus one per earlier snapshot) with the
+  full cards and a picker — so a reader who left after the first description can diff from there.
 
 Rendered twice: a short chat view (the map's top label) and a **mobile-first HTML report** (cards,
 collapsible, filterable by severity/tag, copyable `file:line`, feedback buttons). The skill then stays
