@@ -1034,7 +1034,8 @@ print("  unreachable origin folds nothing (fails closed)")
 write_pin(up_sha, sub)
 v4, _ = m.vendor_scan(con, None, {"src/other.ts"})
 assert ".claude/skills/thing" in v4, v4
-assert v4[".claude/skills/thing"]["detail_src"] == "content verified against the pin", v4
+assert "content verified against the pin" in v4[".claude/skills/thing"]["detail_src"], v4
+assert "re-derived" not in v4[".claude/skills/thing"]["detail_src"], v4
 print("  a pre-existing pin still folds against the hash alone")
 print("vendored fold upstream provenance OK")
 PUP
