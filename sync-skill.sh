@@ -13,7 +13,7 @@
 #                                                   # over skills/describe-changes here; review + commit here,
 #                                                   # then forward-sync every consumer again.
 #
-# Both directions are all-or-nothing (staged in a temp dir first). Requires git, tar, rsync.
+# Both directions are all-or-nothing (staged in a temp dir first). Requires git, tar, rsync, python3.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL=describe-changes
@@ -40,6 +40,19 @@ if [ -n "$FROM" ]; then
   echo "Pulled $SRC → $REPO/skills/$SKILL"
   git -C "$REPO" status --short -- "skills/$SKILL" || true
   echo "Review the diff above, commit here, then run ./sync-skill.sh <consumer> for every consumer."
+  # A backward sync deliberately does NOT rewrite the consumer's pin: the edits are not upstream yet,
+  # so there is no commit to name. Say so, because the pin now describes neither the tree nor a
+  # published commit until the forward sync lands.
+  PIN="$FROM/.claude/skills/.describe-changes-version"
+  if [ -f "$PIN" ]; then
+    WAS="$(sed -n 's/^tree_sha256=//p' "$PIN")"
+    NOW="$(python3 "$SRC/scripts/tree-hash.py" "$SRC" 2>/dev/null || echo unavailable)"
+    if [ -n "$WAS" ] && [ "$WAS" != "$NOW" ]; then
+      echo ""
+      echo "NOTE: $FROM's pin still names the pre-edit copy (tree_sha256 $(printf %s "$WAS" | cut -c1-12)… != $(printf %s "$NOW" | cut -c1-12)…)."
+      echo "      It stays stale until you commit here and forward-sync that consumer."
+    fi
+  fi
   exit 0
 fi
 
@@ -65,14 +78,22 @@ fi
 [ -f "$STAGE/skills/$SKILL/SKILL.md" ] || die "staged copy has no SKILL.md — aborting, no changes made"
 
 rm -rf "$DEST/$SKILL"; mv "$STAGE/skills/$SKILL" "$DEST/$SKILL"
+# Content hash of what was just vendored. `sha` says where the copy CAME FROM; only this says
+# what it IS — and the two part company the moment someone edits the vendored copy in place, which
+# `--from` exists to support. Recompute with the command in the file to detect that.
+TREEHASH="$(python3 "$DEST/$SKILL/scripts/tree-hash.py" "$DEST/$SKILL" 2>/dev/null || echo unavailable)"
 cat > "$DEST/.describe-changes-version" <<V
 # describe-changes vendored copy — managed by sync-skill.sh. DO NOT edit by hand.
 # Re-sync:  <describe-changes>/sync-skill.sh <this-repo> [--ref <ref> | --worktree]
 # Pull edits made here back upstream:  <describe-changes>/sync-skill.sh --from <this-repo>
+# Verify the copy still matches this pin:
+#   python3 .claude/skills/$SKILL/scripts/tree-hash.py .claude/skills/$SKILL
+# A mismatch means the copy was edited in place and NOT yet pushed upstream + re-vendored.
 sha=$SHA
 ref=$REF
 origin=$ORIGIN
 skills=$SKILL
+tree_sha256=$TREEHASH
 V
 SHORT="${SHA:0:7}"
 echo "Vendored $SKILL @ $SHORT ($REF) into $DEST/$SKILL"

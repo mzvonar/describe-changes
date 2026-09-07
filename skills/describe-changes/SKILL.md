@@ -209,8 +209,11 @@ nohup python3 "$S/serve.py" "$OUT" --port ${PORT:-8790} > "$OUT/serve.log" 2>&1 
 sleep 0.5; cat "$OUT/serve.log"
 ```
 
-Give the user the **LAN and Tailscale URLs** (phone-friendly) and the local path. The page is
-self-contained except the mermaid renderer (CDN); the map's text fallback shows if offline.
+Give the user the **LAN and Tailscale URLs** (phone-friendly) and the local path. **Pass the URLs
+exactly as printed — each carries a `?k=…` token** minted for this run; the server binds 0.0.0.0 (a
+phone cannot reach a loopback bind) and refuses any request that has neither the token nor the cookie
+the first open sets. `--no-token` serves openly for a trusted setup, and says so in its banner. The
+page is self-contained except the mermaid renderer (CDN); the map's text fallback shows if offline.
 If the `Artifact` tool is available and the user is remote, you may also publish `$OUT/index.html`
 (keep the same file path on re-publish). Skip all of this with `--chat-only`.
 

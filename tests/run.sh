@@ -19,7 +19,7 @@ cd "$T" || { echo "FATAL: cannot enter scratch dir '$T'" >&2; exit 1; }
 [ "$(pwd -P)" = "$(cd "$T" && pwd -P)" ] || { echo "FATAL: not in the scratch dir" >&2; exit 1; }
 git rev-parse --show-toplevel >/dev/null 2>&1 && { echo "FATAL: '$T' is inside an existing git repo — refusing to write fixtures into it" >&2; exit 1; }
 git init -q -b main . && git config user.email t@t && git config user.name t
-printf 'home/\nget.html\nserve.log\n' > .gitignore
+printf 'home/\nget.html\nserve.log\nserve2.log\njar\nth/\n' > .gitignore
 
 mkdir -p src/util src/api
 cat > src/util/strings.ts <<'F'
@@ -606,12 +606,45 @@ python3 "$S/feedback.py" question "why upsert?" --dir "$OUT" --finding C1 >/dev/
 python3 "$S/feedback.py" digest | grep -q "over-rated" || fail "digest"
 python3 "$S/feedback.py" push | grep -q "no shared backend" || fail "push without backend"
 
-# serve: POST /feedback
-python3 "$S/serve.py" "$OUT" --port 8799 >"$T/serve.log" 2>&1 & SP=$!; sleep 0.7
-curl -sf -X POST localhost:8799/feedback -d '{"events":[{"ts":"2026-01-01T00:00:02Z","type":"more","finding":"C1"}]}' | grep -q '"stored": 1' || { kill $SP; fail "serve POST"; }
-curl -sf -o "$T/get.html" localhost:8799/ && grep -q '<title>' "$T/get.html" || { kill $SP; fail "serve GET"; }
+# serve: the token gate, then the round trip through it.
+# The negative rows come first and carry a pristine positive control below them: a gate that
+# refuses everything passes every negative row, so the 403s prove nothing on their own.
+python3 "$S/serve.py" "$OUT" --port 8799 --token testtoken >"$T/serve.log" 2>&1 & SP=$!; sleep 0.7
+code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+[ "$(code localhost:8799/raw.diff)" = 403 ] || { kill $SP; fail "serve: unauthenticated GET must be 403"; }
+[ "$(code 'localhost:8799/?k=wrongtoken')" = 403 ] || { kill $SP; fail "serve: wrong token must be 403"; }
+[ "$(code -X POST localhost:8799/feedback -d '{"events":[{"type":"smuggled"}]}')" = 403 ] || { kill $SP; fail "serve: unauthenticated POST must be 403"; }
+# the URL serve.py prints works, and hands out the cookie the page's relative requests ride
+curl -sf -c "$T/jar" -o /dev/null 'localhost:8799/?k=testtoken' || { kill $SP; fail "serve: printed token URL must work"; }
+grep -q dc_report "$T/jar" || { kill $SP; fail "serve: token URL must set the cookie"; }
+curl -sf -b "$T/jar" -X POST localhost:8799/feedback -d '{"events":[{"ts":"2026-01-01T00:00:02Z","type":"more","finding":"C1"}]}' | grep -q '"stored": 1' || { kill $SP; fail "serve POST"; }
+curl -sf -b "$T/jar" -o "$T/get.html" localhost:8799/ && grep -q '<title>' "$T/get.html" || { kill $SP; fail "serve GET"; }
 kill $SP; wait $SP 2>/dev/null || true
 grep -q '"type": "more"' "$OUT/feedback.jsonl" || fail "feedback not appended"
+grep -q smuggled "$OUT/feedback.jsonl" && fail "serve: refused POST still reached the store"
+# --no-token is the documented escape hatch; it must genuinely serve open
+python3 "$S/serve.py" "$OUT" --port 8799 --no-token >"$T/serve2.log" 2>&1 & SP=$!; sleep 0.7
+curl -sf -o /dev/null localhost:8799/raw.diff || { kill $SP; fail "serve --no-token must serve openly"; }
+kill $SP; wait $SP 2>/dev/null || true
+echo "serve token gate OK"
+
+# tree-hash: the pin's content hash must be stable, and must move for any edit that ships
+TH="$T/th"; rm -rf "$TH"; mkdir -p "$TH/a/sub"
+printf 'hello\n' > "$TH/a/f.txt"; printf 'x\n' > "$TH/a/sub/g.py"; chmod +x "$TH/a/sub/g.py"
+cp -a "$TH/a" "$TH/b"
+BASE=$(python3 "$S/tree-hash.py" "$TH/a")
+[ "$(python3 "$S/tree-hash.py" "$TH/b")" = "$BASE" ] || fail "tree-hash: identical copy must hash the same"
+printf 'hello!\n' > "$TH/b/f.txt"
+[ "$(python3 "$S/tree-hash.py" "$TH/b")" != "$BASE" ] || fail "tree-hash: blind to a content edit"
+cp -a "$TH/a" "$TH/c"; chmod -x "$TH/c/sub/g.py"
+[ "$(python3 "$S/tree-hash.py" "$TH/c")" != "$BASE" ] || fail "tree-hash: blind to an exec-bit change"
+cp -a "$TH/a" "$TH/d"; mkdir -p "$TH/d/__pycache__"; printf 'junk' > "$TH/d/__pycache__/x.pyc"
+[ "$(python3 "$S/tree-hash.py" "$TH/d")" = "$BASE" ] || fail "tree-hash: __pycache__ must not move the hash"
+cp -a "$TH/a" "$TH/e"; mv "$TH/e/f.txt" "$TH/e/renamed.txt"
+[ "$(python3 "$S/tree-hash.py" "$TH/e")" != "$BASE" ] || fail "tree-hash: blind to a rename"
+cp -a "$TH/a" "$TH/g"; rm "$TH/g/sub/g.py"
+[ "$(python3 "$S/tree-hash.py" "$TH/g")" != "$BASE" ] || fail "tree-hash: blind to a deletion"
+echo "tree-hash OK"
 # comments: ask → list → answer → rendered
 printf '%s\n' '{"ts":"2026-01-01T00:00:03Z","type":"comment","id":"cabc","text":"what is this?","anchor":{"text":"saveUser","context":"…saveUser now persists…","section":"summary","finding":null}}' >> "$OUT/feedback.jsonl"
 python3 "$S/feedback.py" comments --dir "$OUT" --open | grep -q '\[cabc\] OPEN' || fail "comments list"

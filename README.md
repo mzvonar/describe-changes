@@ -127,7 +127,17 @@ cd "$DC"                                     # your checkout (see dev mode above
 ```
 
 Writes `<consumer>/.claude/skills/describe-changes/` + `<consumer>/.claude/skills/.describe-changes-version`
-(`sha=…`). Commit both in the consumer. Add `.describe-changes/` to the consumer's `.gitignore`.
+(`sha=…` where it came from, `tree_sha256=…` what it *is*). Commit both in the consumer. Add
+`.describe-changes/` to the consumer's `.gitignore`. Because editing a vendored copy in place is
+supported here, the commit sha alone cannot tell a consumer whether its tree still matches its pin —
+recompute the content hash to find out:
+
+```bash
+python3 .claude/skills/describe-changes/scripts/tree-hash.py .claude/skills/describe-changes
+```
+
+A mismatch means the copy was edited and not yet pushed upstream + re-vendored. `--from` prints the
+same warning, since it deliberately leaves the pin alone (the edits have no upstream commit yet).
 
 If you edited a vendored copy in place while using it, `./sync-skill.sh --from /path/to/consumer`
 copies it back here; review, commit, then forward-sync every consumer again. Dev mode never needs
@@ -150,7 +160,10 @@ It also triggers on its own after the agent implements a story/task ("walk me th
 changed", "what should I review").
 
 Output lands in `<repo>/.describe-changes/<branch>/` (`report.json`, `index.html`, `feedback.jsonl`,
-`diff-model.json`, `substantive.diff`). The server prints LAN and Tailscale URLs for the phone.
+`diff-model.json`, `substantive.diff`). The server prints LAN and Tailscale URLs for the phone; it
+binds `0.0.0.0` because a phone cannot reach a loopback bind, so every request is gated on a token
+minted per run and printed inside those URLs (the first open sets a cookie for the rest of the
+session). `--token T` pins it, `--no-token` serves openly for a trusted setup.
 
 ## Learning loop
 
