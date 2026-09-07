@@ -340,6 +340,48 @@ def _materialise(root, ref, rel):
     except Exception:
         return None
 
+def _verify_against_upstream(origin, sha, upstream_path, want_hash, th, timeout=90):
+    """Is `want_hash` really the content at `origin`@`sha`:`upstream_path`? (verdict, why).
+
+    This is the ONLY check that establishes provenance. `tree_sha256` proves a copy matches the pin
+    beside it, and when that pin arrives in the same diff, both halves are the author's — pointing
+    `skills=` at any directory and hashing it satisfies every local check. So when the pin is part
+    of the change under review, the bytes are re-derived from the real remote: shallow-fetch the
+    pinned commit, read the subtree out of it, hash it the same way, compare.
+
+    Fails CLOSED. No network, a remote that will not serve the sha, a missing upstream_path — none
+    of those prove anything, so none of them fold."""
+    import subprocess, tempfile, shutil
+    if not (origin and sha and upstream_path and want_hash and th):
+        return False, "pin lacks origin/sha/upstream_path — cannot re-derive it from the remote"
+    tmp = tempfile.mkdtemp(prefix="dc-upstream-")
+    try:
+        r = lambda *a: subprocess.run(["git", "-C", tmp, *a], capture_output=True, text=True, timeout=timeout)
+        if subprocess.run(["git", "init", "-q", tmp], capture_output=True, timeout=30).returncode != 0:
+            return False, "could not create a scratch repo to verify the upstream"
+        r("remote", "add", "origin", origin)
+        f = r("fetch", "--depth", "1", "-q", "origin", sha)
+        if f.returncode != 0:
+            return False, f"could not fetch {sha[:7]} from {origin} — not verified (offline, or the remote will not serve it)"
+        out = subprocess.run(["git", "-C", tmp, "archive", sha, "--", upstream_path],
+                             capture_output=True, timeout=timeout)
+        if out.returncode != 0 or not out.stdout:
+            return False, f"{upstream_path} is not present at {sha[:7]} in {origin}"
+        import tarfile, io
+        with tarfile.open(fileobj=io.BytesIO(out.stdout)) as tf:
+            try: tf.extractall(tmp, filter="data")
+            except TypeError: tf.extractall(tmp)
+        d = os.path.join(tmp, upstream_path)
+        if not os.path.isdir(d):
+            return False, f"{upstream_path} is not a directory at {sha[:7]} in {origin}"
+        return (th(d) == want_hash,
+                "content matches the upstream commit" if th(d) == want_hash
+                else f"content does NOT match {origin} @ {sha[:7]} — the pin describes different bytes")
+    except Exception as e:
+        return False, f"upstream verification failed ({type(e).__name__}) — not verified"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
 def vendor_scan(root, verify_ref=None, changed=()):
     """(verified, notes) — repo-relative subtree paths that are provably their pinned upstream.
 
@@ -391,12 +433,18 @@ def vendor_scan(root, verify_ref=None, changed=()):
                 if tmp_parent: shutil.rmtree(tmp_parent, ignore_errors=True)
             if got != want:
                 notes.append({"path": rel, "why": "copy differs from its pin — edited in place, shown in full"})
-            else:
-                verified[rel] = {"origin": origin, "sha": sha[:7] or "?", "pin": pin_rel,
-                                 "pin_in_diff": pin_rel in changed}
-                if pin_rel in changed:
-                    notes.append({"path": rel, "why": f"folded on a pin this same change introduces ({pin_rel}) — "
-                                                      f"confirm origin {origin} @ {sha[:7]} before trusting it"})
+                continue
+            detail_src = "content verified against the pin"
+            if pin_rel in changed:
+                # The pin arrives with the change it authorises, so every LOCAL check is the
+                # author's own word. Re-derive the bytes from the real remote or fold nothing.
+                ok, why = _verify_against_upstream(origin, sha, pin.get("upstream_path"), want, th)
+                if not ok:
+                    notes.append({"path": rel, "why": f"pin introduced by this same change and {why} — shown in full"})
+                    continue
+                detail_src = f"re-derived from {origin} @ {sha[:7]}, not merely from the pin"
+            verified[rel] = {"origin": origin, "sha": sha[:7] or "?", "pin": pin_rel,
+                             "pin_in_diff": pin_rel in changed, "detail_src": detail_src}
     return verified, notes
 
 def vendored_of(path, verified):
@@ -579,7 +627,7 @@ def main():
         model_files.append(entry)
         if noise:
             prov = vendored_of(f.path, verified) if noise == "vendored" else None
-            detail = (f"{f.status}, from {prov['origin']} @ {prov['sha']} (content verified against the pin)"
+            detail = (f"{f.status}, from {prov['origin']} @ {prov['sha']} ({prov['detail_src']})"
                       if prov else f"{f.status}, {len(hunks)} hunks")
             folds[noise].append({"file": f.path, "hunk_ids": [h["id"] for h in hunks], "detail": detail})
         if cat_file == "rename": folds["rename"].append({"file": f.path, "old_path": f.old_path, "hunk_ids": [], "detail": f"{f.old_path} → {f.path} (pure rename, {f.similarity}%)", "followers": []})

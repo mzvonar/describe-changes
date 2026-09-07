@@ -78,8 +78,10 @@ fi
 [ -f "$STAGE/skills/$SKILL/SKILL.md" ] || die "staged copy has no SKILL.md — aborting, no changes made"
 
 rm -rf "$DEST/$SKILL"; mv "$STAGE/skills/$SKILL" "$DEST/$SKILL"
-# Content hash of what was just vendored. `sha` says where the copy CAME FROM; only this says
-# what it IS — and the two part company the moment someone edits the vendored copy in place, which
+# Content hash of what was just vendored, plus where it sits upstream. `sha` says where the copy
+# CAME FROM; `upstream_path` says where to look for it there, so a consumer can re-derive the copy
+# from the real remote instead of trusting a hash the same change supplied; only tree_sha256 says
+# what the copy IS — and the two part company the moment someone edits the vendored copy in place, which
 # `--from` exists to support. Recompute with the command in the file to detect that.
 TREEHASH="$(python3 "$DEST/$SKILL/scripts/tree-hash.py" "$DEST/$SKILL" 2>/dev/null || echo unavailable)"
 cat > "$DEST/.describe-changes-version" <<V
@@ -93,6 +95,7 @@ sha=$SHA
 ref=$REF
 origin=$ORIGIN
 skills=$SKILL
+upstream_path=skills/$SKILL
 tree_sha256=$TREEHASH
 V
 SHORT="${SHA:0:7}"

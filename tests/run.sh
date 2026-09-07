@@ -962,20 +962,82 @@ write_pin(None)
 verified3, notes3 = m.vendor_scan(root)
 assert not verified3, verified3
 assert any("no tree_sha256" in n["why"] for n in notes3), notes3
-# 4. the pin is INSIDE the diff it authorises. Hash proves the copy matches its pin; it proves
-#    nothing about provenance, so an author could pin their own directory. The fold is kept (a
-#    vendoring MR is the whole use case) but must say so.
+# 4. the pin is INSIDE the diff it authorises, and its origin cannot be reached. Every LOCAL
+#    check passes — hash matches pin — and that is exactly the state an author can manufacture,
+#    so the fold must fail CLOSED rather than trust it. The fixture's origin is the reserved
+#    `.invalid` TLD (RFC 2606), which is guaranteed never to resolve — the fetch fails fast and
+#    the test needs no network.
 write_pin(th(sub))
 v4, n4 = m.vendor_scan(root, None, {".claude/skills/.describe-changes-version"})
-assert ".claude/skills/thing" in v4, v4
-assert v4[".claude/skills/thing"]["pin_in_diff"] is True, v4
-assert any("this same change introduces" in n["why"] for n in n4), n4
-# a pin NOT in the diff folds silently, as before
+assert ".claude/skills/thing" not in v4, "an unverifiable in-diff pin authorised a fold"
+assert any("this same change" in n["why"] for n in n4), n4
+# a pin NOT in the diff is provenance a previous review already accepted: folds on the hash alone
 v5, n5 = m.vendor_scan(root, None, {"src/other.ts"})
+assert ".claude/skills/thing" in v5, v5
 assert v5[".claude/skills/thing"]["pin_in_diff"] is False, v5
 assert not n5, n5
 print("vendored fold OK")
 PVEN
+
+# A pin that arrives WITH the change it authorises is the author's own word, so the bytes are
+# re-derived from the real remote or nothing folds. Uses a local file:// origin — no network.
+python3 - "$S" "$T" <<'PUP' || fail "vendored fold upstream provenance"
+import importlib.util, os, subprocess, sys
+S, T = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("cd", S + "/classify-diff.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+th = m._tree_hash_fn()
+up = os.path.join(T, "upstream")                       # the real upstream repo
+os.makedirs(os.path.join(up, "skills/thing"), exist_ok=True)
+U = lambda *a: subprocess.run(["git", "-C", up, *a], capture_output=True, text=True, check=True)
+subprocess.run(["git", "init", "-q", up], check=True); U("config", "user.email", "u@u"); U("config", "user.name", "u")
+open(os.path.join(up, "skills/thing/a.py"), "w").write("print('genuine upstream')\n")
+U("add", "-A"); U("commit", "-qm", "upstream v1")
+up_sha = U("rev-parse", "HEAD").stdout.strip()
+origin = "file://" + up
+
+con = os.path.join(T, "consumer"); sub = os.path.join(con, ".claude/skills/thing")
+os.makedirs(sub, exist_ok=True)
+pin_rel = ".claude/skills/.describe-changes-version"
+def write_pin(sha, body_dir):
+    open(os.path.join(con, pin_rel), "w").write(
+        f"origin={origin}\nsha={sha}\nskills=thing\nupstream_path=skills/thing\n"
+        f"tree_sha256={th(body_dir)}\n")
+
+# 1. GENUINE vendoring: the copy really is the upstream commit -> folds, and says it was re-derived
+open(os.path.join(sub, "a.py"), "w").write("print('genuine upstream')\n")
+write_pin(up_sha, sub)
+v, n = m.vendor_scan(con, None, {pin_rel})
+assert ".claude/skills/thing" in v, (v, n)
+assert "re-derived" in v[".claude/skills/thing"]["detail_src"], v
+print("  genuine in-diff vendoring folds, re-derived from the remote")
+
+# 2. THE ATTACK: attacker code, self-consistent pin, real origin+sha -> must NOT fold
+open(os.path.join(sub, "a.py"), "w").write("print('attacker payload')\n")
+write_pin(up_sha, sub)          # hash recomputed over the payload: every LOCAL check passes
+assert th(sub) == open(os.path.join(con, pin_rel)).read().split("tree_sha256=")[1].strip()
+v2, n2 = m.vendor_scan(con, None, {pin_rel})
+assert ".claude/skills/thing" not in v2, "attacker payload was folded out of review"
+assert any("does NOT match" in x["why"] for x in n2), n2
+print("  attacker payload refused, and the note says the content does not match upstream")
+
+# 3. unreachable origin -> fails CLOSED
+open(os.path.join(sub, "a.py"), "w").write("print('genuine upstream')\n")
+open(os.path.join(con, pin_rel), "w").write(
+    f"origin=file://{T}/does-not-exist\nsha={up_sha}\nskills=thing\nupstream_path=skills/thing\n"
+    f"tree_sha256={th(sub)}\n")
+v3, n3 = m.vendor_scan(con, None, {pin_rel})
+assert ".claude/skills/thing" not in v3, "an unreachable origin still folded"
+print("  unreachable origin folds nothing (fails closed)")
+
+# 4. control: the SAME pin, not in the diff, still folds cheaply without any network
+write_pin(up_sha, sub)
+v4, _ = m.vendor_scan(con, None, {"src/other.ts"})
+assert ".claude/skills/thing" in v4, v4
+assert v4[".claude/skills/thing"]["detail_src"] == "content verified against the pin", v4
+print("  a pre-existing pin still folds against the hash alone")
+print("vendored fold upstream provenance OK")
+PUP
 
 # committed-only reports describe HEAD, so the vendored proof must be read from HEAD — not from a
 # working tree that may have been re-vendored since the edit was committed.
