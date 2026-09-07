@@ -1,6 +1,6 @@
 ---
 name: describe-changes
-version: "1.15.0"
+version: "1.15.1"
 description: >
   Present an implemented change to a human reviewer the way a human needs it: what was done and why,
   a visual map of the high-level change (who calls whom, where data flows, what moved/split/renamed),
@@ -85,12 +85,16 @@ do what the codebase already does one way, a library the project does not use �
 structural one is **critical**: it propagates, and only a human can call it direction or mistake.
 Cite the rule or ≥ 2 siblings in `diverges_from`; uncited, it is taste and the validator rejects it.
 
-**When a vendored fold rests on a pin the same change introduces, the bytes are re-derived from
-the real remote before anything folds** — the classifier shallow-fetches the pinned commit and
-compares the subtree, because a pin arriving with its own change is the author's own word and a
-local hash proves only self-consistency. A copy that cannot be re-derived is never folded and says
-why in `notes`; you do not need to re-check that. What DOES deserve a line in the report: say which
-origin and commit the fold was verified against, so the reviewer knows what they are trusting.
+**A vendored subtree folds only when its provenance survives two checks the diff cannot forge.**
+A pin arriving with the change it authorises is the author's own word — hash and `origin` alike —
+so the classifier requires BOTH: the `origin` and `upstream_path` must already be present, and
+unchanged, in the pin at the **base ref** (an earlier review accepted that upstream), AND the bytes
+must re-derive from it by shallow-fetching the pinned commit. Anything else is read in full, with
+the reason in `notes`: a **first vendoring** (no accepted origin exists yet), a change that
+**repoints `origin`** (adopting an upstream is a human decision), a report with **no base ref**, an
+unreachable remote, or content that does not match. You do not need to re-check any of that — the
+classifier already refused. What DOES deserve a line in the report is the fold that DID happen: say
+which origin and commit it was verified against, so the reviewer knows what they are trusting.
 
 **Mine the repo's own review trail first.** `deferred-work.md`, `lessons-inbox.md`, review-findings
 sections, PR comments: deferred items are the author's *known* doubts — list them under
