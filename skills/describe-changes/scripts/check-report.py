@@ -9,6 +9,9 @@ references a known node, ids are unique and follow C1/M1/L1 numbering.
 import json, sys, os, re
 
 SEV = {"critical": "C", "medium": "M", "low": "L"}
+# Who raised a finding, on a two-pass run (SKILL.md §2b). "both" is the strongest signal the report
+# can carry: two readers who could not see each other's work landed on the same spot.
+PROVENANCE = {"fresh", "author", "both"}
 MAX_CRITICAL, MAX_MEDIUM = 3, 7
 REQ_TOP = ["title", "summary", "phases", "graph", "findings", "folded"]
 
@@ -106,6 +109,8 @@ def main():
                 errs.append(f"confession[{i}]: each item needs a one-line 'point' (plus optional 'detail')")
             elif len(item["point"]) > 180:
                 warns.append(f"confession[{i}]: point is {len(item['point'])} chars — it is a headline; move the rest into 'detail'")
+            if isinstance(item, dict) and not isinstance(item.get("corroborated_by", []), list):
+                errs.append(f"confession[{i}]: corroborated_by must be a list of finding ids — use [] for 'the cold pass looked and flagged nothing here'")
         if len(conf) > 6:
             warns.append(f"{len(conf)} confession items — if everything is doubtful nothing is; keep the ones that would change what a reviewer does")
     elif isinstance(conf, str) and len(conf) > 300:
@@ -126,8 +131,27 @@ def main():
             errs.append(f"{fid}: file '{f['file']}' is not in the diff")
         if f.get("lines") and not re.fullmatch(r"\d+(-\d+)?", str(f["lines"])): errs.append(f"{fid}: lines must be 'N' or 'N-M'")
         if len(f.get("why_human", "")) > 400: warns.append(f"{fid}: why_human is long ({len(f['why_human'])} chars) — compress")
+        if "provenance" in f and f["provenance"] not in PROVENANCE:
+            errs.append(f"{fid}: provenance must be one of {'|'.join(sorted(PROVENANCE))} (got {f['provenance']!r})")
         e2, w2 = check_divergence(f, fid, repo_root)
         errs += e2; warns += w2
+
+    # Provenance is all-or-nothing. A report where some findings name their pass and others do not
+    # cannot be read: an untagged finding is indistinguishable from one the cold pass missed, which
+    # inverts the meaning of the section this field exists to feed.
+    tagged = [f for f in r["findings"] if f.get("provenance")]
+    if tagged and len(tagged) != len(r["findings"]):
+        errs.append(
+            f"{len(tagged)} of {len(r['findings'])} findings carry 'provenance' — set it on every "
+            "finding or on none; a partly-tagged report reads as if the cold pass missed the rest"
+        )
+    # `corroborated_by` must point at findings that exist, or the "Two readings" section cites ids
+    # the reader cannot find.
+    if isinstance(conf, list):
+        for i, item in enumerate(conf):
+            for ref in (item.get("corroborated_by") or []) if isinstance(item, dict) else []:
+                if ref not in ids:
+                    errs.append(f"confession[{i}]: corroborated_by names {ref}, which is not a finding id")
     if counts["critical"] > MAX_CRITICAL:
         errs.append(f"{counts['critical']} critical findings > budget {MAX_CRITICAL}. If everything is critical, nothing is — demote.")
     if counts["medium"] > MAX_MEDIUM: warns.append(f"{counts['medium']} medium findings > soft budget {MAX_MEDIUM}")

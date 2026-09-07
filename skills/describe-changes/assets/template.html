@@ -74,11 +74,29 @@ section>h2 .cnt{font-weight:500;letter-spacing:0;text-transform:none;font-size:.
 .verify b{color:var(--info);display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.25rem}
 .loc{display:inline-flex;align-items:center;gap:.4rem;font-family:var(--mono);font-size:.78rem;color:var(--fg2);background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:.25rem .5rem;cursor:pointer;max-width:100%;word-break:break-all}
 .loc:active{border-color:var(--info)}
-.diff{background:#0b0e14;border:1px solid var(--line);border-radius:8px;overflow-x:auto;font-family:var(--mono);font-size:.76rem;line-height:1.45}
+/* `overscroll-behavior:contain`: code lines are `white-space:pre`, so almost every diff is a
+   horizontal scroller. Reaching the end of one used to hand the gesture to the page behind — a
+   sideways flick paged the document, and a vertical drag started inside a diff that had nothing to
+   scroll vertically moved the page instead of the sheet. */
+.diff{background:#0b0e14;border:1px solid var(--line);border-radius:8px;overflow-x:auto;overscroll-behavior:contain;font-family:var(--mono);font-size:.76rem;line-height:1.45}
 .diff .hh{color:var(--info);padding:.35rem .6rem;border-bottom:1px solid var(--line);background:var(--bg2);white-space:nowrap}
+.diff .hh .hint{color:var(--fg3);margin-left:.6rem;font-size:.9em}
 .diff pre{padding:.4rem 0;margin:0}
 .diff .l{padding:0 .6rem;white-space:pre}
 .diff .l.a{background:rgba(47,133,90,.22);color:#c6f6d5}.diff .l.d{background:rgba(197,48,48,.22);color:#fed7d7}.diff .l.c{color:var(--fg3)}
+/* The line-number gutter is the per-line comment control. `user-select:none` is what keeps the
+   older select-the-code-and-ask gesture intact — without it every copied snippet carries numbers.
+   The 💬 is absolutely positioned INSIDE the gutter's own empty left half, so revealing it on hover
+   cannot shift the code by a pixel (the lines are `white-space:pre`; any inline badge would). */
+.diff .ln{display:inline-block;position:relative;width:3.6em;margin-right:.7rem;padding-right:.45rem;text-align:right;color:var(--fg3);border-right:1px solid var(--line);cursor:pointer;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.diff .ln.off{cursor:default}
+.diff .ln::before{content:"💬";position:absolute;left:.1em;top:0;opacity:0;transition:opacity .1s}
+.diff .l:hover .ln::before,.diff .ln:focus::before{opacity:.7}
+.diff .ln:hover,.diff .ln:focus{color:var(--info);outline:none}
+.diff .ln.off::before{content:none}
+.diff .l.has-c{box-shadow:inset 3px 0 0 var(--info)}
+.diff .l.has-c .ln{color:var(--info);font-weight:700}
+.diff .l.has-c .ln::before{opacity:1}
 details.more summary{cursor:pointer;color:var(--fg2);font-size:.85rem;padding:.3rem 0}
 .fb{display:flex;flex-wrap:wrap;gap:.4rem;padding-top:.2rem}
 .fb button,.btn{font:inherit;font-size:.78rem;font-weight:600;padding:.5rem .8rem;border-radius:8px;border:1px solid var(--line2);background:var(--bg2);color:var(--fg2);cursor:pointer;min-height:38px;-webkit-tap-highlight-color:transparent}
@@ -192,19 +210,44 @@ button.fpath:active{border-color:var(--info)}
 .footer{position:fixed;left:0;right:0;bottom:0;z-index:9;background:rgba(22,26,35,.96);border-top:1px solid var(--line);padding:.6rem 1rem calc(.6rem + env(safe-area-inset-bottom));display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:var(--fg2)}
 .footer .st{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .footer .btn.primary{border-color:var(--info);color:var(--info)}
+/* Undelivered feedback is the one state worth shouting about: the reader's note is safe in
+   localStorage but Claude has not seen it, and they cannot tell the difference by looking. */
+.footer.warn{background:rgba(90,26,26,.97);border-top-color:var(--crit)}
+.footer .st.bad{color:#ffd9cc;font-weight:700;white-space:normal}
+.footer .btn.danger{border-color:var(--crit);color:var(--crit);background:rgba(252,129,74,.14)}
 .toast{position:fixed;left:50%;bottom:5rem;transform:translateX(-50%);background:#2a3340;color:var(--fg);padding:.5rem .9rem;border-radius:8px;font-size:.8rem;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
 .toast.show{opacity:1}
 .empty{color:var(--fg3);font-size:.9rem;padding:.5rem 0}
-.ask-btn{position:absolute;z-index:30;display:none;font:inherit;font-size:.78rem;font-weight:700;padding:.4rem .7rem;border-radius:999px;border:1px solid var(--info);background:#16202c;color:var(--info);box-shadow:0 4px 16px rgba(0,0,0,.4);cursor:pointer}
+/* Both sit ABOVE the file sheet (51). Most code in this report is read inside that sheet, so a
+   popup underneath it means a comment started on a diff cannot be typed or sent — the button
+   appears, the popup opens behind the sheet, and the reader is left tapping a dead panel.
+   `position:fixed` for the same reason: the sheet is a fixed, independently-scrolled box, and a
+   button placed in PAGE coordinates lands nowhere near the selection it belongs to. */
+.ask-btn{position:fixed;z-index:60;display:none;font:inherit;font-size:.78rem;font-weight:700;padding:.4rem .7rem;border-radius:999px;border:1px solid var(--info);background:#16202c;color:var(--info);box-shadow:0 4px 16px rgba(0,0,0,.4);cursor:pointer}
 .ask-btn.show{display:block}
-.ask-pop{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--bg2);border-top:1px solid var(--line2);padding:.9rem 1rem calc(1rem + env(safe-area-inset-bottom));display:none;box-shadow:0 -8px 30px rgba(0,0,0,.5)}
+.ask-pop{position:fixed;left:0;right:0;bottom:0;z-index:61;background:var(--bg2);border-top:1px solid var(--line2);padding:.9rem 1rem calc(1rem + env(safe-area-inset-bottom));display:none;box-shadow:0 -8px 30px rgba(0,0,0,.5)}
 .ask-pop.show{display:block}
 @media(min-width:700px){.ask-pop{left:50%;right:auto;bottom:4rem;transform:translateX(-50%);width:560px;border:1px solid var(--line2);border-radius:var(--radius)}}
-.ask-pop .q{font-family:var(--mono);font-size:.8rem;color:var(--info);background:rgba(99,179,237,.08);border-left:3px solid var(--info);padding:.35rem .6rem;margin-bottom:.6rem;word-break:break-word;max-height:4.5rem;overflow:auto}
+.ask-pop .q{font-family:var(--mono);font-size:.8rem;color:var(--info);background:rgba(99,179,237,.08);border-left:3px solid var(--info);padding:.35rem .6rem;margin-bottom:.6rem;word-break:break-word;max-height:4.5rem;overflow:auto;overscroll-behavior:contain}
 .ask-pop .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.6rem}
 .ask-pop .chips button{font:inherit;font-size:.75rem;padding:.35rem .6rem;border-radius:999px;border:1px solid var(--line2);background:var(--bg);color:var(--fg2);cursor:pointer}
 .ask-pop textarea{width:100%;font:inherit;font-size:.9rem;background:var(--bg);color:var(--fg);border:1px solid var(--line2);border-radius:8px;padding:.55rem .7rem;min-height:64px;resize:vertical}
 .ask-pop .row{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem}
+/* Provenance — who raised a finding, when two independent passes ran. Deliberately quiet: it
+   qualifies the finding, it is not a second severity. */
+.prov{display:inline-block;font-size:.66rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:.12rem .45rem;border-radius:5px;border:1px solid var(--line2);color:var(--fg2);margin-top:.5rem}
+.prov-fresh{border-color:var(--info);color:var(--info)}
+.prov-both{border-color:var(--low);color:var(--low)}
+.prov-author{border-color:var(--line2);color:var(--fg3)}
+/* Two readings — the disagreement between the passes, which a merged list would destroy. */
+.tr-g{margin:.1rem 0 .9rem}
+.tr-g:last-child{margin-bottom:0}
+.tr-g b{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.25rem}
+.tr-g b.tr-blind{color:var(--crit)}.tr-g b.tr-open{color:var(--med)}.tr-g b.tr-agree{color:var(--low)}
+.tr-g ul{margin:.35rem 0 0;padding-left:1.1rem}
+.tr-g li{margin:.2rem 0;font-size:.92rem}
+.tr-g .empty{padding:0 0 .2rem}
+.loc-plain{font-family:var(--mono);font-size:.75rem;color:var(--fg3)}
 .thread{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:.85rem 1rem;margin-bottom:.75rem}
 .thread .anchor{font-family:var(--mono);font-size:.75rem;color:var(--info);word-break:break-word}
 .thread .anchor small{color:var(--fg3)}
@@ -253,7 +296,11 @@ button.fpath:active{border-color:var(--info)}
 @media(min-width:900px){.sheet{left:50%;right:auto;bottom:3vh;width:860px;max-height:90vh;transform:translateX(-50%);border-radius:14px;border:1px solid var(--line2)}}
 .sheet-h{display:flex;align-items:center;gap:.6rem;padding:.7rem 1rem;border-bottom:1px solid var(--line)}
 .sheet-t{flex:1;font-family:var(--mono);font-size:.8rem;color:var(--fg);word-break:break-all}
-.sheet-b{overflow:auto;padding:.8rem 1rem calc(1rem + env(safe-area-inset-bottom))}
+/* `min-height:0` so the body can shrink below its content inside the `max-height`-clamped column —
+   without it a long diff pushes the sheet past the viewport instead of scrolling inside it.
+   `overscroll-behavior:contain` stops the gesture at the ends: a flick past the last line used to
+   carry on into the page BEHIND the sheet, which reads as the sheet refusing to scroll. */
+.sheet-b{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:.8rem 1rem calc(1rem + env(safe-area-inset-bottom))}
 .sheet-b>*+*{margin-top:.6rem}
 .toc{display:flex;gap:.4rem;flex-wrap:wrap;margin:.75rem 0 0}
 .toc a{font-size:.75rem;text-decoration:none;color:var(--fg2);border:1px solid var(--line);padding:.25rem .6rem;border-radius:999px}
@@ -280,16 +327,35 @@ __BODY__
   // Feedback belongs to the REPORT, not to this browser. Events the server already holds are
   // baked into the page at render time and merged in here, so a re-render — or a second device,
   // or cleared site data — never shows a card as un-verified when someone verified it.
-  const sig = e => [e.ts, e.type, e.finding || '', e.check || '', e.check_key || '', e.file || '', e.id || ''].join('|');
+  const sig = e => [e.ts, e.type, e.finding || '', e.finding_key || '', e.check || '', e.check_key || '', e.file || '', e.id || ''].join('|');
   {
     const seen = new Set(fb.map(sig));
     (R.prior || []).forEach(e => { if (!seen.has(sig(e))) { seen.add(sig(e)); fb.push(Object.assign({}, e, {sent: true})); } });
     fb.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   }
   const $ = (s, r) => (r||document).querySelector(s), $$ = (s, r) => Array.from((r||document).querySelectorAll(s));
+  // Thread anchors are built with innerHTML and quote code the reader selected, so every
+  // interpolated fragment goes through this — a `<` in a diff line is content, never markup.
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1600); };
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(fb)); } catch(e) {} status(); };
-  const status = () => { const n = fb.filter(e=>!e.sent).length; $('#fb-status').textContent = fb.length ? `${fb.length} feedback event${fb.length>1?'s':''}${n?` · ${n} unsent`:' · all sent'}` : 'Tap ▲▼✕ on a finding or ⚑ on a file to teach the skill'; };
+  // Everything the reader types is written to localStorage BEFORE any network call, so nothing is
+  // ever lost to a failed send. What was missing is being TOLD: the auto-send after each event ran
+  // quiet, so a failure left a muted "1 unsent" in the footer and nothing else. Silence about
+  // undelivered feedback is the one thing this footer must never do — the reader walks away
+  // believing Claude has their note.
+  const status = () => {
+    const n = fb.filter(e => !e.sent).length;
+    const bar = $('#fb-status'), btn = $('#fb-send');
+    bar.classList.toggle('bad', n > 0 && served);
+    btn.classList.toggle('danger', n > 0 && served);
+    bar.closest('.footer').classList.toggle('warn', n > 0 && served);
+    if (!fb.length) { bar.textContent = 'Tap ▲▼✕ on a finding or ⚑ on a file to teach the skill'; return; }
+    if (!n) { bar.textContent = `${fb.length} feedback event${fb.length > 1 ? 's' : ''} · all sent`; return; }
+    bar.textContent = served
+      ? `⚠ ${n} NOT SENT — saved here, but Claude has not got ${n > 1 ? 'them' : 'it'}. Tap Send.`
+      : `${fb.length} saved · opened as a file — tap Copy JSON to hand ${n > 1 ? 'them' : 'it'} over`;
+  };
   const event = (type, finding, extra) => {
     const e = Object.assign({ts: new Date().toISOString(), type, finding: finding||null, report_id: R.report_id, repo: R.repo, range: R.range_label}, extra||{});
     fb.push(e); save(); if (served) send(true);
@@ -303,9 +369,17 @@ __BODY__
       const res = await fetch('feedback', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({events: pending})});
       if (!res.ok) throw new Error(res.status);
       pending.forEach(e=>e.sent=true); save(); if(!quiet) toast(`Sent ${pending.length}`);
-    } catch(err) { if(!quiet) toast('Send failed — Copy JSON instead'); }
+    } catch(err) {
+      // Loud even when the send was the automatic one — `status()` paints the footer red, and the
+      // toast fires regardless of `quiet` because a swallowed failure is the whole defect.
+      save(); toast('⚠ NOT SENT — still saved here. Tap Send, or Copy JSON.');
+    }
   }
   $('#fb-send').onclick = () => send(false);
+  // Retry the moment the connection or the tab comes back, so a phone that slept mid-report does
+  // not leave the reader staring at a red bar they have to clear by hand.
+  window.addEventListener('online', () => { if (served) send(true); });
+  document.addEventListener('visibilitychange', () => { if (served && !document.hidden) send(true); });
   $('#fb-copy').onclick = async () => {
     const txt = JSON.stringify({report_id: R.report_id, repo: R.repo, events: fb}, null, 2);
     try { await navigator.clipboard.writeText(txt); toast('Copied — paste it into the Claude session'); }
@@ -333,22 +407,55 @@ __BODY__
       toast({more:'Marked more important', less:'Marked less important', noise:'Marked as noise', checked:'Marked checked'}[t]);
     };
   });
+  // A note carries the card's CONTENT key as well as its id. The id (`M2`) is a position in a
+  // severity-sorted list — re-authoring the report hands it to a different claim, and a replay keyed
+  // on it puts the reader's note under a finding they never wrote it about. The key is what the
+  // renderer matches on; the id stays for readability and for older events.
   $$('.fb textarea').forEach(ta => {
-    const id = ta.closest('.card').dataset.id;
-    ta.addEventListener('change', () => { if (ta.value.trim()) { event('note', id, {text: ta.value.trim()}); toast('Note saved'); } });
+    const card = ta.closest('.card');
+    const id = card.dataset.id, key = card.dataset.key;
+    ta.addEventListener('change', () => { if (ta.value.trim()) { event('note', id, {text: ta.value.trim(), finding_key: key}); toast('Note saved'); } });
+    // Replay a note this browser holds that is NEWER than the server-rendered value: the textarea is
+    // seeded at render time, so a note typed after the last render would otherwise vanish on reload
+    // and read as lost.
+    const mine = fb.filter(e => e.type === 'note' && e.finding_key === key && e.text).at(-1);
+    if (mine && mine.text !== ta.value) { ta.value = mine.text; }
   });
   // expand a file in "Everything else"
   // file store: lazy code for rows + sheet for ⟨/⟩ chips
   let STORE = {}; try { STORE = JSON.parse(document.getElementById('file-store').textContent); } catch(e) {}
   const codeFor = f => (STORE[f] && STORE[f].html) || '<div class="empty">not in this change</div>';
+  // Every code injection below is lazy, so a line that already carries a comment has to be re-marked
+  // each time its diff is (re-)built. Assigned by the line-comment block near the end of this file;
+  // a no-op until then, so the order of the two blocks cannot break either one.
+  let afterCode = () => {};
   $$('.unrev .row.fold-row').forEach(r => r.addEventListener('click', ev => {
     if (ev.target.closest('button')) return; r.classList.toggle('open');
     const body = r.nextElementSibling; const c = body && body.querySelector('.row-code');
-    if (c && !c.dataset.done) { c.innerHTML = codeFor(body.dataset.file); c.dataset.done = '1'; }
+    if (c && !c.dataset.done) { c.innerHTML = codeFor(body.dataset.file); c.dataset.done = '1'; afterCode(c); }
   }));
   const sheet = $('#sheet'), sheetBg = $('#sheet-bg');
-  const openSheet = f => { $('#sheet-t').textContent = f + (STORE[f] ? ' · ' + STORE[f].status : ''); $('#sheet-b').innerHTML = codeFor(f); sheet.classList.add('show'); sheetBg.classList.add('show'); };
-  const closeSheet = () => { sheet.classList.remove('show'); sheetBg.classList.remove('show'); };
+  // Freeze the page behind the sheet. `overscroll-behavior` alone is not enough: a diff SHORTER than
+  // the sheet has no inner scroll to contain, so the gesture goes straight to the document and the
+  // reader watches the report slide about under a sheet that looks stuck.
+  // `position:fixed` rather than `overflow:hidden` — iOS Safari ignores the latter on the scrolling
+  // element, and a phone is where this was reported. The offset is restored on close, so the reader
+  // comes back to the line they opened the file from rather than to the top.
+  let lockedY = 0;
+  const lockPage = () => {
+    lockedY = window.scrollY;
+    const s = document.body.style;
+    s.position = 'fixed'; s.top = -lockedY + 'px'; s.left = '0'; s.right = '0'; s.width = '100%';
+  };
+  const unlockPage = () => {
+    const s = document.body.style;
+    if (s.position !== 'fixed') return;
+    s.position = ''; s.top = ''; s.left = ''; s.right = ''; s.width = '';
+    window.scrollTo(0, lockedY);
+  };
+  const showSheet = () => { sheet.classList.add('show'); sheetBg.classList.add('show'); lockPage(); };
+  const openSheet = f => { $('#sheet-t').textContent = f + (STORE[f] ? ' · ' + STORE[f].status : ''); $('#sheet-b').innerHTML = codeFor(f); afterCode($('#sheet-b')); showSheet(); };
+  const closeSheet = () => { sheet.classList.remove('show'); sheetBg.classList.remove('show'); unlockPage(); };
   // Delegated on [data-open], not on a class: every file reference anywhere in the report — view
   // chips, phase paths, the uncommitted list — opens that file's changes, and anything added later
   // inherits it by carrying the attribute.
@@ -357,7 +464,8 @@ __BODY__
     const html = ids.split(',').map(id => HUNKS[id] || '').join('');
     $('#sheet-t').textContent = label + ' · folded change';
     $('#sheet-b').innerHTML = html || '<div class="empty">this hunk was not captured</div>';
-    sheet.classList.add('show'); sheetBg.classList.add('show');
+    afterCode($('#sheet-b'));
+    showSheet();
   };
   document.addEventListener('click', ev => {
     // Folded hunks win over the whole-file view: inside a fold card the reader asked about THAT
@@ -504,6 +612,9 @@ __BODY__
   let sel = null;
   const sectionOf = el => { const s = el && el.closest && el.closest('section'); return s ? s.id : 'header'; };
   const findingOf = el => { const c = el && el.closest && el.closest('.card[data-id]'); return c ? c.dataset.id : null; };
+  // The content key beside the id, for the same reason notes carry it: a comment anchored to "C2"
+  // is anchored to a position, and positions get reassigned when the report is re-authored.
+  const findingKeyOf = el => { const c = el && el.closest && el.closest('.card[data-key]'); return c ? c.dataset.key : null; };
   function onSel(){
     const s = window.getSelection(); const t = s && s.toString().trim();
     if (!t || t.length > 300 || s.rangeCount === 0 || pop.classList.contains('show')) { askBtn.classList.remove('show'); return; }
@@ -511,9 +622,16 @@ __BODY__
     if (!node.closest('.page') || node.closest('textarea,input,.ask-pop')) { askBtn.classList.remove('show'); return; }
     const ctxEl = node.closest('p,li,div,td,span') || node; const full = ctxEl.textContent || '';
     const i = full.indexOf(t); const context = full.slice(Math.max(0, i - 90), i + t.length + 90).trim();
-    sel = { text: t, context, section: sectionOf(node), finding: findingOf(node) };
+    sel = { text: t, context, section: sectionOf(node), finding: findingOf(node), finding_key: findingKeyOf(node) };
+    // A selection that landed inside a diff gets the same `file:line` a gutter tap would carry, and
+    // its context is rebuilt from the code alone — `ctxEl.textContent` on a diff line would
+    // otherwise bake the gutter number into the quoted context.
+    const dl = node.closest('.diff .l[data-f]');
+    if (dl) { Object.assign(sel, lineAnchor(dl)); sel.text = t; }
     const r = range.getBoundingClientRect();
-    askBtn.style.top = (window.scrollY + r.top - 40) + 'px'; askBtn.style.left = Math.max(8, window.scrollX + r.left) + 'px'; askBtn.classList.add('show');
+    // Viewport coordinates, matching the button's `position:fixed` — page coordinates put it off
+    // by the scroll offset inside the file sheet, which is where most code is read.
+    askBtn.style.top = Math.max(8, r.top - 40) + 'px'; askBtn.style.left = Math.max(8, r.left) + 'px'; askBtn.classList.add('show');
   }
   document.addEventListener('selectionchange', () => { clearTimeout(onSel._t); onSel._t = setTimeout(onSel, 250); });
   askBtn.addEventListener('mousedown', ev => ev.preventDefault());
@@ -524,17 +642,67 @@ __BODY__
   const renderThread = c => {
     if (!threadsEl || $('#t-' + c.id)) return;
     const d = document.createElement('div'); d.className = 'thread'; d.id = 't-' + c.id;
-    d.innerHTML = `<div class="anchor">“${c.anchor.text.replace(/</g,'&lt;')}” <small>· ${c.anchor.section}${c.anchor.finding ? ' · ' + c.anchor.finding : ''}</small></div><div class="ctext"></div><div class="st open">Waiting for Claude — ask in the session to fetch comments</div>`;
+    // The location leads when there is one: a thread opened from a diff is answered by opening
+    // `path:line`, and burying that behind the quoted code makes the reader hunt for it.
+    const where = c.anchor.file ? `<span class="loc" data-loc="${esc(c.anchor.file + (c.anchor.line ? ':' + c.anchor.line : ''))}">⧉ ${esc(c.anchor.file)}${c.anchor.line ? ':' + c.anchor.line : ''}</span> ` : '';
+    d.innerHTML = `<div class="anchor">${where}“${esc(c.anchor.text)}” <small>· ${esc(c.anchor.section)}${c.anchor.finding ? ' · ' + esc(c.anchor.finding) : ''}</small></div><div class="ctext"></div><div class="st open">Waiting for Claude — ask in the session to fetch comments</div>`;
     d.querySelector('.ctext').textContent = c.text; threadsEl.prepend(d); $('#threads-empty')?.classList.add('hidden');
+    d.querySelector('.loc')?.addEventListener('click', async e => { try { await navigator.clipboard.writeText(e.currentTarget.dataset.loc); toast('Copied ' + e.currentTarget.dataset.loc); } catch(err) {} });
   };
   $('#ask-send').onclick = () => {
     const text = askText.value.trim(); if (!text || !sel) return;
     const id = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const e = event('comment', sel.finding, { id, text, anchor: sel });
-    renderThread(e); pop.classList.remove('show'); window.getSelection()?.removeAllRanges();
+    renderThread(e); noteCommented(sel); pop.classList.remove('show'); window.getSelection()?.removeAllRanges();
     toast(served ? 'Sent — ask Claude to fetch comments' : 'Saved — Copy JSON to hand it to Claude');
   };
   fb.filter(e => e.type === 'comment' && e.id).forEach(renderThread);
+
+  // ---- Per-line comments on a code diff -------------------------------------------------------
+  // The GUTTER is the control, never the line: dragging across code is how a reader selects it, and
+  // a click target over the code would swallow that gesture and leave the older whole-selection ask
+  // unreachable inside a diff — the one place the reader most wants both.
+  const codeOf = el => Array.from(el.childNodes)
+    .filter(n => !(n.nodeType === 1 && n.classList.contains('ln')))
+    .map(n => n.textContent).join('');
+  // ±2 lines of the same hunk. A one-line quote reads as an accusation with no scene; more than
+  // five turns the thread into a diff of its own.
+  const lineAnchor = el => {
+    const sibs = Array.from(el.parentElement.children), i = sibs.indexOf(el);
+    return { file: el.dataset.f, line: Number(el.dataset.n), side: el.dataset.side,
+             hunk: el.dataset.h || null, text: codeOf(el).trim().slice(0, 300) || '(blank line)',
+             context: sibs.slice(Math.max(0, i - 2), i + 3).map(codeOf).join('\n'),
+             section: sectionOf(el), finding: findingOf(el), finding_key: findingKeyOf(el) };
+  };
+  const COMMENTED = new Set();
+  const lineKey = a => a && a.file && a.line ? a.file + ':' + a.line : null;
+  afterCode = root => {
+    if (!COMMENTED.size) return;
+    $$('.diff .l[data-f]', root).forEach(l => l.classList.toggle('has-c', COMMENTED.has(l.dataset.f + ':' + l.dataset.n)));
+  };
+  const noteCommented = a => { const k = lineKey(a); if (!k) return; COMMENTED.add(k); afterCode(document); };
+  fb.filter(e => e.type === 'comment' && e.anchor).forEach(e => { const k = lineKey(e.anchor); if (k) COMMENTED.add(k); });
+  afterCode(document);
+  const openLineAsk = el => {
+    sel = lineAnchor(el);
+    $('#ask-q').textContent = sel.file + ':' + sel.line + ' — ' + sel.text;
+    askText.value = ''; askBtn.classList.remove('show'); pop.classList.add('show');
+    setTimeout(() => askText.focus(), 50);
+  };
+  // Delegated, because most diffs are injected lazily into the sheet long after this runs.
+  document.addEventListener('click', ev => {
+    const g = ev.target.closest('.diff .ln:not(.off)'); if (!g) return;
+    // A click that ends a drag is a selection, not a tap: honour it and let the ask button appear.
+    if ((window.getSelection() || '').toString().trim()) return;
+    const l = g.closest('.l[data-f]'); if (!l) return;
+    ev.preventDefault(); ev.stopPropagation(); openLineAsk(l);
+  });
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const g = ev.target.closest && ev.target.closest('.diff .ln:not(.off)'); if (!g) return;
+    const l = g.closest('.l[data-f]'); if (!l) return;
+    ev.preventDefault(); openLineAsk(l);
+  });
   // one-time view event
   if (!sessionStorage.getItem('dc-viewed:'+R.report_id)) { sessionStorage.setItem('dc-viewed:'+R.report_id, '1'); }
   status();
