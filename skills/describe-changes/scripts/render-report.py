@@ -862,7 +862,19 @@ def main():
                                  "section": "findings (earlier version)", "finding": e.get("finding")}}
                      for e in orphan_notes.values()]
     threads = threads + note_threads
-    b.append(f'<section id="conversation"><h2>Conversation <span class="cnt">{len(threads)} — comments, and notes left on findings</span></h2><div id="threads">')
+    # Collapsible, and shut by default once the thread list is long enough to bury the two sections
+    # that follow it. An answered conversation is history: worth keeping, rarely worth scrolling. An
+    # OPEN thread is the exception — something is waiting on the reader — so any unanswered thread
+    # keeps the section expanded regardless of length. A reader's own toggle is remembered and beats
+    # both defaults (see `dc-sec:` in the template).
+    open_threads = sum(1 for c in threads if c["id"] not in answers)
+    collapsed = "1" if (len(threads) > 6 and open_threads == 0) else "0"
+    cnt = f'{len(threads)} — comments, and notes left on findings'
+    if open_threads:
+        cnt = f'{open_threads} open · {cnt}'
+    b.append(f'<section id="conversation"><h2 class="sec-t" data-collapsed="{collapsed}">'
+             f'<span class="lhs"><span class="tw">▼</span>Conversation</span>'
+             f'<span class="cnt">{cnt}</span></h2><div id="threads">')
     for c in reversed(threads):
         ans = answers.get(c["id"]); an = c.get("anchor") or {}
         # A thread opened on a diff leads with its location: it is answered by opening `path:line`,

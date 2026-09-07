@@ -283,10 +283,14 @@ For each follow-up:
   Prefer showing the one decisive snippet over narrating.
 - **Log it** so the skill learns what the report failed to answer up front:
   `python3 "$S/feedback.py" question "<the question>" --dir "$OUT" [--finding C1] [--answered-by-reading src/x.ts:40-80]`
-- **Fetch page comments.** The report takes comments two ways: selecting any text (a symbol in the
-  summary, a sentence in a phase, a line in a card) and asking about it, **and tapping the line
-  number beside any line of code** — every diff in the report carries a gutter, whether it sits in a
-  finding card, a file sheet or a fold. When the user says "check the comments", "I asked something
+- **Fetch page comments.** The report takes reader input FOUR ways, and `comments` returns all of
+  them: selecting any text (a symbol in the summary, a sentence in a phase, a line in a card) and
+  asking about it; **tapping the line number beside any line of code** — every diff in the report
+  carries a gutter, whether it sits in a finding card, a file sheet or a fold; a note typed into a
+  **finding** card; and a note typed into a **verification check** card. Never filter to one type by
+  hand: each surface that was ever left out of this command has been silently lost at least once,
+  the reader having been told "no open comments" while their words sat in `feedback.jsonl`.
+  When the user says "check the comments", "I asked something
   in the report", or at every natural pause:
   `python3 "$S/feedback.py" comments --dir "$OUT" --open`
   Each thread carries the selection, its surrounding context, section and finding; a comment left on

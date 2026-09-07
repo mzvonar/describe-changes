@@ -30,6 +30,14 @@ header.top .sub{font-size:.8rem;color:var(--fg3);font-family:var(--mono);margin-
 section{margin:0 0 2rem}
 section>h2{font-size:.72rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--fg3);margin:0 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
 section>h2 .cnt{font-weight:500;letter-spacing:0;text-transform:none;font-size:.75rem}
+/* Collapsible section. The twisty sits before the title and the whole h2 is the hit target, so it
+   works on a phone without a precise tap. Body hidden via [hidden] on the wrapper, not display:none
+   on children, so a re-render cannot leave half a section visible. */
+section>h2.sec-t{cursor:pointer;user-select:none;-webkit-user-select:none}
+section>h2.sec-t .tw{display:inline-block;width:.9em;margin-right:.35rem;color:var(--fg3);transition:transform .12s ease}
+section>h2.sec-t[aria-expanded="false"] .tw{transform:rotate(-90deg)}
+section>h2.sec-t:hover{color:var(--fg)}
+section>h2.sec-t .lhs{display:flex;align-items:center;gap:0;min-width:0}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:.75rem;overflow:hidden}
 .card.sev-critical{border-left:4px solid var(--crit)}.card.sev-medium{border-left:4px solid var(--med)}.card.sev-low{border-left:4px solid var(--low)}
 .card-h{display:flex;align-items:flex-start;gap:.6rem;padding:.85rem 1rem;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
@@ -322,6 +330,36 @@ __BODY__
 (function(){
   const R = JSON.parse(document.getElementById('report-data').textContent);
   const KEY = 'dc-fb:' + R.report_id;
+
+  /* Collapsible sections. Keyed on the SECTION id and not on report_id, so the reader's choice to
+     keep the Conversation shut survives a re-render — the whole point, since the report is
+     re-rendered repeatedly at the same URL while findings are worked through. A section opts in by
+     rendering `<h2 class="sec-t">`; nothing else needs to know about it. */
+  const SKEY = 'dc-sec:' + R.repo;
+  let secState = {}; try { secState = JSON.parse(localStorage.getItem(SKEY) || '{}'); } catch(e) {}
+  const secOpeners = {};
+  document.querySelectorAll('section > h2.sec-t').forEach(h => {
+    const sec = h.parentElement, id = sec.id;
+    const body = h.nextElementSibling;
+    if (!body) return;
+    // A section with an explicit stored choice honours it; otherwise the render-time default (the
+    // `data-collapsed` attribute) decides, so a long conversation can arrive shut without ever
+    // overriding someone who deliberately opened it.
+    const open = id in secState ? secState[id] : h.dataset.collapsed !== '1';
+    const apply = v => {
+      h.setAttribute('aria-expanded', v ? 'true' : 'false');
+      let n = body; while (n) { n.hidden = !v; n = n.nextElementSibling; }
+    };
+    const set = v => {
+      apply(v); secState[id] = v;
+      try { localStorage.setItem(SKEY, JSON.stringify(secState)); } catch(e) {}
+    };
+    apply(open);
+    h.addEventListener('click', () => set(h.getAttribute('aria-expanded') !== 'true'));
+    secOpeners[id] = () => { if (h.getAttribute('aria-expanded') !== 'true') set(true); };
+  });
+  // Anything that adds content to a section can force it open — see `renderThread`.
+  window.dcOpenSection = id => secOpeners[id]?.();
   const served = location.protocol.startsWith('http');
   let fb = []; try { fb = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch(e) {}
   // Feedback belongs to the REPORT, not to this browser. Events the server already holds are
@@ -654,6 +692,11 @@ __BODY__
     const id = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const e = event('comment', sel.finding, { id, text, anchor: sel });
     renderThread(e); noteCommented(sel); pop.classList.remove('show'); window.getSelection()?.removeAllRanges();
+    // A comment written into a COLLAPSED Conversation would appear to vanish — the reader's own
+    // words, swallowed by a section they shut earlier. Only on a NEW comment: doing it inside
+    // `renderThread` also fired during the replay below, which re-opened the section on every load
+    // and wrote that back as a deliberate choice, so the collapsed default could never be seen.
+    window.dcOpenSection?.('conversation');
     toast(served ? 'Sent — ask Claude to fetch comments' : 'Saved — Copy JSON to hand it to Claude');
   };
   fb.filter(e => e.type === 'comment' && e.id).forEach(renderThread);

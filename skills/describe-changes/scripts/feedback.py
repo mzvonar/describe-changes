@@ -154,6 +154,31 @@ def cmd_comments(a):
                      "section": "findings", "finding": e["finding"],
                      "file": None, "line": None, "side": None, "hunk": None,
                      "answered": tid in ans})
+    # Notes typed into a VERIFICATION CHECK card. A third type, and it was missing here for exactly
+    # the reason the docstring gives about the second one: a reader wrote "this just shows a generic
+    # error toast and the doc stayed in extracting status" onto a check, `comments` answered "no open
+    # comments", and the report looked like it had received nothing. Any surface a reader can type
+    # into has to come out of ONE command, or the one that is forgotten is silently lost.
+    ctx_checks = load_ctx(a.dir)["checks"]
+    check_notes = {}
+    for e in fb:
+        if e.get("type") != "check_note" or not e.get("text") or not e.get("check"):
+            continue
+        check_notes[e.get("check_key") or ("id:" + e["check"])] = e
+    for group, e in check_notes.items():
+        cid = e["check"]
+        meta = ctx_checks.get(cid) or {}
+        # Same orphan rule as findings: a check id is a position in a list and can be reassigned when
+        # the report is re-authored, so say when the note belongs to a check that is no longer there.
+        orphan = cid not in ctx_checks
+        tid = "checknote-" + (e.get("check_key") or cid)
+        rows.append({"id": tid,
+                     "kind": "note on a check (from an earlier version)" if orphan else "note on a check",
+                     "ts": e.get("ts"), "text": e["text"],
+                     "selection": meta.get("feature") or cid, "context": meta.get("where"),
+                     "section": "how to verify", "finding": e.get("finding"),
+                     "file": None, "line": None, "side": None, "hunk": None,
+                     "answered": tid in ans})
     for e in fb:
         if e.get("type") != "comment" or not e.get("id") or e["id"] in seen: continue
         seen.add(e["id"]); an = e.get("anchor") or {}
@@ -229,6 +254,20 @@ def cmd_answer(a):
         if note is not None:
             c = {"id": a.id, "text": note["text"],
                  "anchor": {"text": "note on this finding", "section": "findings",
+                            "finding": note.get("finding")}}
+    if c is None and a.id.startswith("checknote-"):
+        # The same for a note left on a VERIFICATION CHECK card. `comments` emits these ids, so
+        # `answer` has to accept them — otherwise the one command that finds the reader's words is
+        # followed by the one that cannot reply to them, which is how a surface ends up unanswerable
+        # while looking supported.
+        token = a.id[len("checknote-"):]
+        note = next((e for e in reversed(fb)
+                     if e.get("type") == "check_note" and e.get("text")
+                     and (e.get("check_key") == token or
+                          (not e.get("check_key") and e.get("check") == token))), None)
+        if note is not None:
+            c = {"id": a.id, "text": note["text"],
+                 "anchor": {"text": "note on this verification check", "section": "how to verify",
                             "finding": note.get("finding")}}
     if c is None: raise SystemExit(f"comment {a.id} not found in {a.dir}/feedback.jsonl")
     with open(os.path.join(a.dir, "answers.jsonl"), "a") as fh:
