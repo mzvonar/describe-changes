@@ -1009,6 +1009,15 @@ assert "v/thing" in vw, vw
 vr, nr = m.vendor_scan(root, head, set())
 assert "v/thing" not in vr, "committed-only report folded a subtree that is edited at HEAD"
 assert any("differs from its pin" in n["why"] for n in nr), nr
+# ...and the pin must be read at that ref too. Proving the SUBTREE at HEAD while reading its
+# expected hash from the WORKING TREE leaves the same hole open from the other side.
+open(os.path.join(sub, "a.py"), "a").write("print('committed edit')\n")
+run("add", "-A"); run("commit", "-qm", "edit again")
+head2 = run("rev-parse", "HEAD").stdout.strip()
+write_pin()  # UNCOMMITTED pin naming the edited subtree's hash — worktree and HEAD subtree agree
+assert run("status", "--porcelain").stdout.strip(), "the pin must be uncommitted for this case"
+v6, n6 = m.vendor_scan(root, head2, set())
+assert "v/thing" not in v6, "an uncommitted pin authorised a fold in a committed-only report"
 print("vendored fold verify-ref OK")
 PREF
 

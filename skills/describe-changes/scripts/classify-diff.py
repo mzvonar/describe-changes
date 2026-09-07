@@ -252,17 +252,35 @@ def _git_toplevel():
     except Exception:
         return None
 
-def _read_pin(path):
+def _parse_pin(text):
     kv = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1); kv[k.strip()] = v.strip()
+    return kv or None
+
+def _read_pin(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1); kv[k.strip()] = v.strip()
+            return _parse_pin(fh.read())
     except OSError:
         return None
-    return kv or None
+
+def _read_pin_at(root, ref, rel):
+    """The pin AS IT EXISTS AT `ref`. Both halves of the proof must come from the reported range.
+
+    Reading the subtree at `ref` while reading its expected hash from the WORKING TREE leaves the
+    hole open from the other side: commit an edit to a vendored subtree, then leave an uncommitted
+    pin whose tree_sha256 is the edited subtree's hash, and the two agree — folding a committed
+    edit that is inside the reported range."""
+    try:
+        import subprocess
+        out = subprocess.run(["git", "-C", root, "show", f"{ref}:{rel}"],
+                             capture_output=True, text=True, timeout=15)
+        return _parse_pin(out.stdout) if out.returncode == 0 else None
+    except Exception:
+        return None
 
 def _tree_hash_fn():
     """tree-hash.py is a CLI with a hyphen in its name, so it cannot be imported normally."""
@@ -345,8 +363,13 @@ def vendor_scan(root, verify_ref=None, changed=()):
     changed = set(changed or ())
     for pin_rel in _find_pins(root):
         pin_abs = os.path.join(root, pin_rel)
-        pin = _read_pin(pin_abs)
-        if not pin: continue
+        pin = _read_pin_at(root, verify_ref, pin_rel) if verify_ref else _read_pin(pin_abs)
+        if not pin:
+            if verify_ref and _read_pin(pin_abs):
+                # the pin exists in the worktree but not at the reported commit, so it describes
+                # nothing in this range
+                notes.append({"path": pin_rel, "why": f"pin does not exist at {verify_ref[:7]} — nothing folded from it"})
+            continue
         origin, sha = pin.get("origin", "?"), (pin.get("sha") or "")
         want = pin.get("tree_sha256")
         for sub in (pin.get("skills") or "").split():

@@ -1,6 +1,6 @@
 ---
 name: describe-changes
-version: "1.12.0"
+version: "1.13.0"
 description: >
   Present an implemented change to a human reviewer the way a human needs it: what was done and why,
   a visual map of the high-level change (who calls whom, where data flows, what moved/split/renamed),
@@ -84,6 +84,15 @@ New code that contradicts a written rule or the local precedent — a skipped la
 do what the codebase already does one way, a library the project does not use — is a finding, and a
 structural one is **critical**: it propagates, and only a human can call it direction or mistake.
 Cite the rule or ≥ 2 siblings in `diverges_from`; uncited, it is taste and the validator rejects it.
+
+**A vendored fold authorised by a pin this change introduces is a MANDATORY finding.** When
+`diff-model.json` → `notes` carries a `folded on a pin this same change introduces` line, the
+classifier removed a subtree from `substantive.diff` on the strength of provenance the same diff
+supplies. The hash proves the copy matches its pin; it proves nothing about where the bytes came
+from, so a `skills=` entry pointed at any directory would fold it. Raise it as a finding whose
+`verify` is "is this origin and commit the upstream you intended?" — name them — and never let the
+fold pass silently just because the model reported it. This is the one case where the noise pass
+hands the reviewer something they must actively confirm rather than skip.
 
 **Mine the repo's own review trail first.** `deferred-work.md`, `lessons-inbox.md`, review-findings
 sections, PR comments: deferred items are the author's *known* doubts — list them under
