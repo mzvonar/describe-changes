@@ -434,7 +434,7 @@ def vendor_scan(root, verify_ref=None, changed=()):
             if got != want:
                 notes.append({"path": rel, "why": "copy differs from its pin — edited in place, shown in full"})
                 continue
-            detail_src = "content verified against the pin"
+            detail_src = f"from {origin} @ {sha[:7]}, content verified against the pin"
             if pin_rel in changed:
                 # The pin arrives with the change it authorises, so every LOCAL check is the
                 # author's own word. Re-derive the bytes from the real remote or fold nothing.
@@ -442,7 +442,7 @@ def vendor_scan(root, verify_ref=None, changed=()):
                 if not ok:
                     notes.append({"path": rel, "why": f"pin introduced by this same change and {why} — shown in full"})
                     continue
-                detail_src = f"re-derived from {origin} @ {sha[:7]}, not merely from the pin"
+                detail_src = f"re-derived from {origin} @ {sha[:7]} itself, not merely from the pin"
             verified[rel] = {"origin": origin, "sha": sha[:7] or "?", "pin": pin_rel,
                              "pin_in_diff": pin_rel in changed, "detail_src": detail_src}
     return verified, notes
@@ -627,8 +627,8 @@ def main():
         model_files.append(entry)
         if noise:
             prov = vendored_of(f.path, verified) if noise == "vendored" else None
-            detail = (f"{f.status}, from {prov['origin']} @ {prov['sha']} ({prov['detail_src']})"
-                      if prov else f"{f.status}, {len(hunks)} hunks")
+            detail = (f"{f.status}, {prov['detail_src']}" if prov
+                      else f"{f.status}, {len(hunks)} hunks")
             folds[noise].append({"file": f.path, "hunk_ids": [h["id"] for h in hunks], "detail": detail})
         if cat_file == "rename": folds["rename"].append({"file": f.path, "old_path": f.old_path, "hunk_ids": [], "detail": f"{f.old_path} → {f.path} (pure rename, {f.similarity}%)", "followers": []})
 
