@@ -147,7 +147,13 @@ json.dump({
 }, open(p, "w"), indent=2)
 PY
 
-python3 "$HERE/classify-diff.py" --diff "$OUT/raw.diff" --numstat "$OUT/numstat.txt" --out "$OUT"
+# --verify-ref: which content the vendored-fold proof must be read from. A committed-only report
+# describes HEAD, so proving a vendored subtree against the WORKING TREE could fold away an edit
+# that is inside the reported range (re-vendor the copy after committing the edit and the worktree
+# matches the pin again). Every other mode reports the working tree, which is what to hash then.
+VERIFY_REF=""; [ "$COMMITTED_ONLY" = 1 ] && VERIFY_REF="$HEAD_SHA"
+python3 "$HERE/classify-diff.py" --diff "$OUT/raw.diff" --numstat "$OUT/numstat.txt" --out "$OUT" \
+  --root "$ROOT" ${VERIFY_REF:+--verify-ref "$VERIFY_REF"}
 
 # conventions.txt — the authorities a convention finding must cite: written guidelines that govern
 # the changed paths, and the untouched neighbours the new code sits next to. Mechanical on purpose;

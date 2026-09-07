@@ -962,8 +962,55 @@ write_pin(None)
 verified3, notes3 = m.vendor_scan(root)
 assert not verified3, verified3
 assert any("no tree_sha256" in n["why"] for n in notes3), notes3
+# 4. the pin is INSIDE the diff it authorises. Hash proves the copy matches its pin; it proves
+#    nothing about provenance, so an author could pin their own directory. The fold is kept (a
+#    vendoring MR is the whole use case) but must say so.
+write_pin(th(sub))
+v4, n4 = m.vendor_scan(root, None, {".claude/skills/.describe-changes-version"})
+assert ".claude/skills/thing" in v4, v4
+assert v4[".claude/skills/thing"]["pin_in_diff"] is True, v4
+assert any("this same change introduces" in n["why"] for n in n4), n4
+# a pin NOT in the diff folds silently, as before
+v5, n5 = m.vendor_scan(root, None, {"src/other.ts"})
+assert v5[".claude/skills/thing"]["pin_in_diff"] is False, v5
+assert not n5, n5
 print("vendored fold OK")
 PVEN
+
+# committed-only reports describe HEAD, so the vendored proof must be read from HEAD — not from a
+# working tree that may have been re-vendored since the edit was committed.
+python3 - "$S" "$T" <<'PREF' || fail "vendored fold verify-ref"
+import importlib.util, os, subprocess, sys
+S, T = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("cd", S + "/classify-diff.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+th = m._tree_hash_fn()
+root = os.path.join(T, "vref"); sub = os.path.join(root, "v/thing")
+os.makedirs(sub, exist_ok=True)
+run = lambda *a: subprocess.run(["git", "-C", root, *a], capture_output=True, text=True, check=True)
+subprocess.run(["git", "init", "-q", root], check=True)
+run("config", "user.email", "t@t"); run("config", "user.name", "t")
+open(os.path.join(sub, "a.py"), "w").write("print(1)\n")
+pin = os.path.join(root, "v/.describe-changes-version")
+def write_pin():
+    open(pin, "w").write("origin=https://example.invalid/x.git\nsha=deadbeefcafe\nskills=thing\n"
+                         f"tree_sha256={th(sub)}\n")
+write_pin(); run("add", "-A"); run("commit", "-qm", "vendored, clean")
+# commit an EDIT to the vendored copy, then re-vendor the worktree so it matches the pin again
+open(os.path.join(sub, "a.py"), "a").write("print('edit inside the reported range')\n")
+run("add", "-A"); run("commit", "-qm", "edit the vendored copy")
+head = run("rev-parse", "HEAD").stdout.strip()
+open(os.path.join(sub, "a.py"), "w").write("print(1)\n")   # worktree back to the pinned content
+assert th(sub) == open(pin).read().split("tree_sha256=")[1].strip(), "worktree must match the pin again"
+# worktree proof would fold — and would hide the committed edit that IS the reported range
+vw, _ = m.vendor_scan(root, None, set())
+assert "v/thing" in vw, vw
+# proof at HEAD must refuse
+vr, nr = m.vendor_scan(root, head, set())
+assert "v/thing" not in vr, "committed-only report folded a subtree that is edited at HEAD"
+assert any("differs from its pin" in n["why"] for n in nr), nr
+print("vendored fold verify-ref OK")
+PREF
 
 # delta pairing: two independent findings in one file must NOT collapse into one "changed" row.
 python3 - "$S" <<'PD' || fail "delta pairing"

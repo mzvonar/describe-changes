@@ -275,35 +275,105 @@ def _tree_hash_fn():
     except Exception: return None
     return getattr(m, "tree_hash", None)
 
-def vendor_scan(root):
+def _find_pins(root):
+    """Repo-relative paths of every provenance file, from git's index rather than a tree walk.
+
+    `os.walk(root)` ran over the whole repository for every report — `build/`, caches and all —
+    even when the diff touched nothing vendored. git already knows the tracked files, and an
+    UNtracked pin should not authorise a fold anyway. Falls back to a pruned walk outside git."""
+    try:
+        import subprocess
+        # --others --exclude-standard as well as the index: a report covers untracked files, so a
+        # vendoring that is staged-but-uncommitted (or not yet added at all) must still be found.
+        # Ignored paths stay out, which is what `--exclude-standard` buys.
+        out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others",
+                              "--exclude-standard", "--"] + [f"*{n}" for n in VENDOR_PINS],
+                             capture_output=True, text=True, timeout=15)
+        if out.returncode == 0:
+            return [p for p in out.stdout.split("\0")
+                    if p and os.path.basename(p) in VENDOR_PINS]
+    except Exception:
+        pass
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "__pycache__", "build", "dist")]
+        for n in VENDOR_PINS:
+            if n in filenames:
+                found.append(os.path.relpath(os.path.join(dirpath, n), root).replace(os.sep, "/"))
+    return found
+
+def _materialise(root, ref, rel):
+    """`rel` as it exists AT `ref`, in a temp dir — or None. Caller removes it."""
+    import subprocess, tempfile, tarfile, io
+    try:
+        out = subprocess.run(["git", "-C", root, "archive", ref, "--", rel],
+                             capture_output=True, timeout=60)
+        if out.returncode != 0 or not out.stdout: return None
+        tmp = tempfile.mkdtemp(prefix="dc-vendor-")
+        with tarfile.open(fileobj=io.BytesIO(out.stdout)) as tf:
+            # filter="data" refuses absolute/parent paths and device nodes (CVE-2007-4559). The
+            # tar comes from `git archive` on this repo, but "the input is trusted" is exactly the
+            # reasoning that makes extraction bugs ship; keep the guard. Older runtimes have no
+            # `filter=` and warn instead, so fall back rather than crash.
+            try: tf.extractall(tmp, filter="data")
+            except TypeError: tf.extractall(tmp)
+        d = os.path.join(tmp, rel)
+        return d if os.path.isdir(d) else None
+    except Exception:
+        return None
+
+def vendor_scan(root, verify_ref=None, changed=()):
     """(verified, notes) — repo-relative subtree paths that are provably their pinned upstream.
+
+    `verify_ref` is the commit whose content the report describes; when set (a committed-only
+    report) the proof is read from THAT ref, not from the working tree — otherwise re-vendoring a
+    copy after committing an edit to it would make the worktree match the pin again and fold away
+    an edit that is inside the reported range.
+
+    `changed` is the set of paths this diff touches. A pin listed there authorises a fold using
+    provenance the same change introduced, so the fold is kept (a vendoring MR is the case this
+    feature exists for) but flagged: the reviewer's remaining job is to confirm the origin and
+    commit are the ones they expect. The hash proves the copy is internally consistent with its
+    pin; it proves nothing about where the bytes came from.
 
     `notes` records every pin that did NOT yield a fold and why, so an unverified copy is visible
     rather than silently substantive."""
+    import shutil
     verified, notes = {}, []
     if not root or not os.path.isdir(root): return verified, notes
     th = _tree_hash_fn()
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "__pycache__")]
-        for pin_name in VENDOR_PINS:
-            if pin_name not in filenames: continue
-            pin = _read_pin(os.path.join(dirpath, pin_name))
-            if not pin: continue
-            origin, sha = pin.get("origin", "?"), (pin.get("sha") or "")
-            want = pin.get("tree_sha256")
-            for sub in (pin.get("skills") or "").split():
-                d = os.path.join(dirpath, sub)
-                if not os.path.isdir(d): continue
-                rel = os.path.relpath(d, root).replace(os.sep, "/")
-                if not want:
-                    notes.append({"path": rel, "why": "pin carries no tree_sha256 — cannot verify"}); continue
-                got = th(d) if th else None
-                if got is None:
-                    notes.append({"path": rel, "why": "tree-hash unavailable — cannot verify"})
-                elif got != want:
-                    notes.append({"path": rel, "why": "copy differs from its pin — edited in place, shown in full"})
-                else:
-                    verified[rel] = {"origin": origin, "sha": sha[:7] or "?"}
+    changed = set(changed or ())
+    for pin_rel in _find_pins(root):
+        pin_abs = os.path.join(root, pin_rel)
+        pin = _read_pin(pin_abs)
+        if not pin: continue
+        origin, sha = pin.get("origin", "?"), (pin.get("sha") or "")
+        want = pin.get("tree_sha256")
+        for sub in (pin.get("skills") or "").split():
+            rel = os.path.normpath(os.path.join(os.path.dirname(pin_rel), sub)).replace(os.sep, "/")
+            if not os.path.isdir(os.path.join(root, rel)): continue
+            if not want:
+                notes.append({"path": rel, "why": "pin carries no tree_sha256 — cannot verify"}); continue
+            if not th:
+                notes.append({"path": rel, "why": "tree-hash unavailable — cannot verify"}); continue
+            probe, tmp_parent = os.path.join(root, rel), None
+            if verify_ref:
+                probe = _materialise(root, verify_ref, rel)
+                if probe is None:
+                    notes.append({"path": rel, "why": f"cannot read the subtree at {verify_ref[:7]} — not verified"}); continue
+                tmp_parent = probe[:-len(rel)] if rel and probe.endswith(rel) else None
+            try:
+                got = th(probe)
+            finally:
+                if tmp_parent: shutil.rmtree(tmp_parent, ignore_errors=True)
+            if got != want:
+                notes.append({"path": rel, "why": "copy differs from its pin — edited in place, shown in full"})
+            else:
+                verified[rel] = {"origin": origin, "sha": sha[:7] or "?", "pin": pin_rel,
+                                 "pin_in_diff": pin_rel in changed}
+                if pin_rel in changed:
+                    notes.append({"path": rel, "why": f"folded on a pin this same change introduces ({pin_rel}) — "
+                                                      f"confirm origin {origin} @ {sha[:7]} before trusting it"})
     return verified, notes
 
 def vendored_of(path, verified):
@@ -434,13 +504,16 @@ def content_lines(lines):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--diff", required=True); ap.add_argument("--numstat"); ap.add_argument("--out", required=True)
-    ap.add_argument("--root", default=None, help="repo root; vendored-subtree proof is read from the working tree")
+    ap.add_argument("--root", default=None, help="repo root; where vendored-subtree pins are read from")
+    ap.add_argument("--verify-ref", default=None,
+                    help="prove vendored subtrees against this commit instead of the working tree "
+                         "(set for a committed-only report, whose range is not the working tree)")
     a = ap.parse_args()
-    root = a.root or _git_toplevel()
-    verified, vendor_notes = vendor_scan(root)
     text = open(a.diff, encoding="utf-8", errors="replace").read()
     files = parse(text)
     os.makedirs(a.out, exist_ok=True)
+    root = a.root or _git_toplevel()
+    verified, vendor_notes = vendor_scan(root, a.verify_ref, {f.path for f in files})
 
     model_files, folds = [], defaultdict(list)
     lines_changed = lines_sub = 0
