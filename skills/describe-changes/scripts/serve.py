@@ -96,6 +96,12 @@ def main():
                 n = int(self.headers.get("Content-Length", 0)); body = self.rfile.read(n)
                 try:
                     events = json.loads(body).get("events", [])
+                    # Shape-check before writing. `events` as a dict iterates to its KEYS, so a
+                    # body like {"events":{"x":1}} used to append the bare string "x" to the
+                    # store — and every consumer of feedback.jsonl expects an object per line, so
+                    # that one line breaks digest/render for good. Refuse it at the door instead.
+                    if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
+                        raise ValueError("events must be a list of objects")
                     with open(fb_path, "a") as fh:
                         for e in events: fh.write(json.dumps(e) + "\n")
                     self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()

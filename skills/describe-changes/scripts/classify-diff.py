@@ -21,6 +21,14 @@ from collections import defaultdict
 WS_SENSITIVE = {".py", ".pyi", ".hs", ".lhs", ".yml", ".yaml", ".nim", ".coffee", ".pug", ".jade",
                 ".slim", ".haml", ".sass", ".styl", ".md", ".mdx", ".rst", ".f90", ".cbl"}
 WS_SENSITIVE_NAMES = {"Makefile", "makefile", "GNUmakefile"}
+# Languages with Automatic Semicolon Insertion. A line break is SEMANTIC in these even though the
+# language is not whitespace-sensitive in the indentation sense: `return\n  value` returns undefined
+# where `return value` does not. So a block whose LINE STRUCTURE changed can never be folded as
+# whitespace/format here, however identical the two sides look once the newlines are stripped.
+# Cost, stated: a pure prettier-style reflow that changes line count stops folding in these
+# languages. That is the intended trade — re-indentation (the common case) keeps folding because it
+# preserves line count, and no fold is allowed to hide a behaviour change.
+ASI_LANGS = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".go"}
 LOCKFILES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "Cargo.lock",
              "poetry.lock", "Pipfile.lock", "composer.lock", "Gemfile.lock", "go.sum", "flake.lock",
              "mix.lock", "pubspec.lock", "packages.lock.json", "uv.lock", "pdm.lock"}
@@ -175,15 +183,19 @@ def blocks_of(h):
     if cur is not None: cur["end"] = len(h.lines); blocks.append(cur)
     return blocks
 
-def classify_block(rem, add, ws_sensitive, in_import=False):
+def classify_block(rem, add, ws_sensitive, in_import=False, asi=False):
     changed = rem + add
     if not changed: return "substantive"
+    # In an ASI language, a changed line COUNT means the line structure moved, and line structure
+    # decides where statements end. Refuse both whitespace and format folding for such a block.
+    reflowed = asi and len([l for l in rem if l.strip()]) != len([l for l in add if l.strip()])
     if all(not l.strip() for l in changed):
         return "substantive" if ws_sensitive else "whitespace"
     if norm_ws("".join(rem)) == norm_ws("".join(add)):
+        if reflowed: return "substantive"
         return "substantive" if ws_sensitive else "whitespace"
     if rem and add and norm_fmt("".join(rem)) == norm_fmt("".join(add)):
-        return "format"
+        return "substantive" if reflowed else "format"
     nonblank = [l for l in changed if l.strip()]
     # Mixed noise is still noise: every changed line must be an import OR a comment. Inside an
     # import statement, a bare specifier counts too — that is what makes a barrel re-point fold.
@@ -208,12 +220,12 @@ def hunk_in_import(h):
 
 NOISE_ORDER = ["import-rewrite", "format", "whitespace", "comment-only"]
 
-def classify_hunk(h, ws_sensitive):
+def classify_hunk(h, ws_sensitive, asi=False):
     """Hunk category = substantive if ANY block is; else the most significant noise kind present.
     Also records h.blocks (per-block categories) so import rewrites inside a substantive hunk can
     still be attached to the rename they follow."""
     in_import = hunk_in_import(h)
-    h.blocks = [dict(b, category=classify_block(b["removed"], b["added"], ws_sensitive, in_import))
+    h.blocks = [dict(b, category=classify_block(b["removed"], b["added"], ws_sensitive, in_import, asi))
                 for b in blocks_of(h)]
     cats = {b["category"] for b in h.blocks}
     if not cats or "substantive" in cats: return "substantive"
@@ -355,10 +367,11 @@ def main():
     for fi, f in enumerate(files, 1):
         all_added = [l for h in f.hunks for l in h.added]
         ws = ext_of(f.path) in WS_SENSITIVE or ext_of(f.path) == "Makefile"
+        asi = ext_of(f.path) in ASI_LANGS
         noise = file_noise_kind(f, all_added)
         hunks = []
         for hi, h in enumerate(f.hunks, 1):
-            cat = classify_hunk(h, ws) if noise is None else noise
+            cat = classify_hunk(h, ws, asi) if noise is None else noise
             hunks.append({"id": f"F{fi}H{hi}", "header": h.header, "symbol": h.context or None,
                           "old_start": h.old_start, "old_lines": h.old_len, "new_start": h.new_start,
                           "new_lines": h.new_len, "category": cat, "added": len(h.added), "removed": len(h.removed),

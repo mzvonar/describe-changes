@@ -56,11 +56,24 @@ def current(d):
             "meta": _read(os.path.join(d, "meta.json"), {}),
             "model": _read(os.path.join(d, "diff-model.json"), {})}
 
+# Every part of the report a reader actually reads. A field left out of this is a field you can
+# rewrite without the returning reader being told anything moved: the fingerprint matches, no
+# snapshot is saved, and "Since you last read this" reports a change-free reading. Findings carry
+# `verify`/`why_human`/`what` because re-writing the QUESTION a reviewer must answer is exactly the
+# kind of edit they need to see, and phases/graph/views/confession because they are the rest of the
+# page. Keep this in step with what render-report.py renders.
+_FINDING_FIELDS = ("id", "severity", "title", "file", "lines", "verify", "why_human", "what")
+
 def _fingerprint(report, meta):
-    return json.dumps({"findings": [(f.get("id"), f.get("severity"), f.get("title"), f.get("file"))
+    return json.dumps({"findings": [[f.get(k) for k in _FINDING_FIELDS]
                                     for f in report.get("findings", [])],
                        "checks": [check_key(c) for c in report.get("how_to_check") or []],
                        "summary": report.get("summary"),
+                       "intent": report.get("intent"),
+                       "phases": report.get("phases"),
+                       "graph": report.get("graph"),
+                       "views": report.get("views"),
+                       "confession": report.get("confession"),
                        "tree": meta.get("fingerprint")}, sort_keys=True, ensure_ascii=False)
 
 def cmd_save(a):
@@ -161,17 +174,44 @@ def compute_delta(before, after):
     for k in gone_keys:
         site_b.setdefault(finding_site_key(fb_[k]), []).append(k)
     still_added, matched_gone = [], set()
+
+    def only_candidate(keys):
+        """The one unmatched candidate in `keys`, or None when there is not exactly one.
+
+        Ambiguity is NOT resolved by taking the first: two unrelated findings in one file would then
+        render as a single finding that "changed", which hides a resolved risk behind a new one and
+        silently drops the other. When more than one candidate survives, pair nothing — the reader
+        is better served by an added finding and a resolved finding, which is what actually happened."""
+        live = [x for x in keys if x not in matched_gone]
+        return live[0] if len(live) == 1 else None
+
     for k in added_keys:
         f = fa[k]
-        pool = ([x for x in gone_keys if x not in matched_gone and fb_[x].get("file") == f.get("file")])
-        if pool:
-            old = fb_[pool[0]]; matched_gone.add(pool[0])
+        # Strongest unambiguous signal first: same file AND severity (a pure re-wording), then same
+        # file alone (a re-rating, which is why `was_severity` exists). Both must be unique to pair.
+        old_k = only_candidate(site_b.get(finding_site_key(f), []))
+        if old_k is None:
+            old_k = only_candidate([x for x in gone_keys if fb_[x].get("file") == f.get("file")])
+        if old_k is not None:
+            old = fb_[old_k]; matched_gone.add(old_k)
             changed.append({"id": f.get("id"), "was_id": old.get("id"), "file": f.get("file"),
                             "title": f.get("title"), "was_title": old.get("title"),
                             "severity": f.get("severity"), "was_severity": old.get("severity")})
         else:
             still_added.append(f)
     resolved = [fb_[k] for k in gone_keys if k not in matched_gone]
+
+    # A finding can keep its key (same file, same claim) and still be RE-RATED, because finding_key
+    # is file+claim and deliberately excludes severity — that is what lets a re-rating stay "the
+    # same finding". But it means a pure critical→medium move produced no delta row at all, while
+    # _fingerprint (which does carry severity) saved a snapshot for it: the reader got a new reading
+    # whose delta said nothing had changed. Report it where the reader looks for it.
+    for k in fa:
+        if k in fb_ and fa[k].get("severity") != fb_[k].get("severity"):
+            old_f, new_f = fb_[k], fa[k]
+            changed.append({"id": new_f.get("id"), "was_id": old_f.get("id"), "file": new_f.get("file"),
+                            "title": new_f.get("title"), "was_title": old_f.get("title"),
+                            "severity": new_f.get("severity"), "was_severity": old_f.get("severity")})
 
     cb = {check_key(c): c for c in (rb.get("how_to_check") or [])}
     ca = {check_key(c): c for c in (ra.get("how_to_check") or [])}

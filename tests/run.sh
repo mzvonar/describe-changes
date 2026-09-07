@@ -619,9 +619,19 @@ curl -sf -c "$T/jar" -o /dev/null 'localhost:8799/?k=testtoken' || { kill $SP; f
 grep -q dc_report "$T/jar" || { kill $SP; fail "serve: token URL must set the cookie"; }
 curl -sf -b "$T/jar" -X POST localhost:8799/feedback -d '{"events":[{"ts":"2026-01-01T00:00:02Z","type":"more","finding":"C1"}]}' | grep -q '"stored": 1' || { kill $SP; fail "serve POST"; }
 curl -sf -b "$T/jar" -o "$T/get.html" localhost:8799/ && grep -q '<title>' "$T/get.html" || { kill $SP; fail "serve GET"; }
+# a dict `events` iterates to its KEYS, so this used to append the bare string "x" to the store and
+# break every consumer that expects an object per line. Authenticated, so it is the shape check —
+# not the token gate — being tested here.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -b "$T/jar" -X POST localhost:8799/feedback -d '{"events":{"x":1}}')" = 400 ] || { kill $SP; fail "serve: malformed events must be 400"; }
+[ "$(curl -s -o /dev/null -w '%{http_code}' -b "$T/jar" -X POST localhost:8799/feedback -d '{"events":["bare string"]}')" = 400 ] || { kill $SP; fail "serve: non-object event must be 400"; }
 kill $SP; wait $SP 2>/dev/null || true
 grep -q '"type": "more"' "$OUT/feedback.jsonl" || fail "feedback not appended"
 grep -q smuggled "$OUT/feedback.jsonl" && fail "serve: refused POST still reached the store"
+grep -qx '"x"' "$OUT/feedback.jsonl" && fail "serve: malformed events wrote a bare string to the store"
+python3 -c "
+import json,sys
+bad=[l for l in open('$OUT/feedback.jsonl') if l.strip() and not isinstance(json.loads(l), dict)]
+sys.exit('non-object lines in the store: %r' % bad[:3]) if bad else print('feedback store shape OK')" || fail "feedback store shape"
 # --no-token is the documented escape hatch; it must genuinely serve open
 python3 "$S/serve.py" "$OUT" --port 8799 --no-token >"$T/serve2.log" 2>&1 & SP=$!; sleep 0.7
 curl -sf -o /dev/null localhost:8799/raw.diff || { kill $SP; fail "serve --no-token must serve openly"; }
@@ -843,4 +853,96 @@ fi
 git add -A && git commit -qm "clean" && OUT4="$(bash "$S/collect-diff.sh" --base main | tail -1 | sed 's/^OUT=//')" || fail "collect on a CLEAN tree must not die (grep/pipefail)"
 python3 -c "import json; m=json.load(open('$OUT4/meta.json')); assert m['uncommitted_files']==[] and m['commits']>=1, m; print('clean tree OK')" || fail "clean tree meta"
 bash "$S/collect-diff.sh" --check "$OUT4" | grep -q unchanged || fail "check on clean tree"
+# ── regression rows for the review findings on the vendoring MR ─────────────────────────────
+# version parity: four files declare the version and feedback.py reads VERSION. They drifted
+# (VERSION 1.8.2 vs 1.0.0 in the other three), so lessons and discovery metadata named different
+# releases. Assert the class, not the instance.
+python3 - "$HERE/.." <<'PV' || fail "version parity"
+import json, re, sys, pathlib
+root = pathlib.Path(sys.argv[1])
+v = (root / "skills/describe-changes/VERSION").read_text().strip()
+sk = re.search(r'^version:\s*"([^"]+)"', (root / "skills/describe-changes/SKILL.md").read_text(), re.M).group(1)
+pl = json.loads((root / ".claude-plugin/plugin.json").read_text())["version"]
+mk = json.loads((root / ".claude-plugin/marketplace.json").read_text())["plugins"][0]["version"]
+assert sk == v and pl == v and mk == v, f"VERSION={v} SKILL.md={sk} plugin={pl} marketplace={mk}"
+print("version parity OK")
+PV
+
+# ASI: a line break is semantic in JS/TS/Go, so a block whose line COUNT moved can never fold as
+# whitespace/format there — `return\n value` returns undefined where `return value` does not.
+python3 - "$S" <<'PA' || fail "ASI classification"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("cd", sys.argv[1] + "/classify-diff.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+cb = m.classify_block
+assert cb(["  return value;\n"], ["  return\n", "  value;\n"], False, asi=True) == "substantive", "ASI split must not fold"
+assert cb(["  return\n", "  value;\n"], ["  return value;\n"], False, asi=True) == "substantive", "ASI join must not fold"
+# controls: the folds this feature exists for must survive
+assert cb(["  a();\n", "  b();\n"], ["    a();\n", "    b();\n"], False, asi=True) == "whitespace", "re-indent must still fold"
+assert cb(["  a();  \n"], ["  a();\n"], False, asi=True) == "whitespace", "trailing ws must still fold"
+assert cb(["  return value;\n"], ["  return\n", "  value;\n"], False, asi=False) == "whitespace", "non-ASI reflow still folds"
+assert m.ASI_LANGS >= {".js", ".ts", ".tsx", ".go"}, m.ASI_LANGS
+print("ASI classification OK")
+PA
+
+# fingerprint: a snapshot is skipped when the fingerprint matches, so any report field a reader
+# reads must be in it — otherwise editing only that field shows a returning reader "nothing moved".
+python3 - "$S" <<'PF' || fail "fingerprint coverage"
+import importlib.util, sys, copy
+spec = importlib.util.spec_from_file_location("sn", sys.argv[1] + "/snapshots.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+base = {"summary": "s", "intent": "i",
+        "findings": [{"id": "C1", "severity": "critical", "title": "t", "file": "a.ts",
+                      "lines": "1-2", "verify": "old question?", "why_human": "w", "what": "x"}],
+        "phases": [{"id": "p1", "title": "P", "narrative": "n"}],
+        "graph": {"nodes": [], "edges": []}, "views": [], "confession": [{"point": "p"}],
+        "how_to_check": []}
+meta = {"fingerprint": "tree1"}
+fp0 = m._fingerprint(base, meta)
+assert m._fingerprint(copy.deepcopy(base), meta) == fp0, "fingerprint must be stable for equal input"
+for path, mutate in [
+    ("finding.verify",    lambda r: r["findings"][0].__setitem__("verify", "NEW question?")),
+    ("finding.why_human", lambda r: r["findings"][0].__setitem__("why_human", "NEW")),
+    ("finding.what",      lambda r: r["findings"][0].__setitem__("what", "NEW")),
+    ("finding.lines",     lambda r: r["findings"][0].__setitem__("lines", "9-9")),
+    ("phases",            lambda r: r["phases"].__setitem__(0, {"id": "p1", "title": "P", "narrative": "NEW"})),
+    ("graph",             lambda r: r["graph"].__setitem__("nodes", [{"id": "n"}])),
+    ("views",             lambda r: r.__setitem__("views", [{"kind": "flow", "steps": []}])),
+    ("confession",        lambda r: r["confession"].__setitem__(0, {"point": "NEW"})),
+    ("intent",            lambda r: r.__setitem__("intent", "NEW")),
+]:
+    r = copy.deepcopy(base); mutate(r)
+    assert m._fingerprint(r, meta) != fp0, f"fingerprint blind to {path}"
+print("fingerprint coverage OK")
+PF
+
+# delta pairing: two independent findings in one file must NOT collapse into one "changed" row.
+python3 - "$S" <<'PD' || fail "delta pairing"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sn", sys.argv[1] + "/snapshots.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+mk = lambda i, sev, t: {"id": i, "severity": sev, "title": t, "file": "src/a.ts", "verify": "?", "why_human": "?"}
+# one resolved + one unrelated new, same file, same severity → ambiguous, so no pairing
+snap = lambda fs: {"report": {"findings": fs}}
+d = m.compute_delta(snap([mk("C1", "critical", "old risk"), mk("C2", "critical", "other old risk")]),
+                    snap([mk("C3", "critical", "brand new risk")]))
+assert len(d["findings_changed"]) == 0, d["findings_changed"]
+assert len(d["findings_added"]) == 1 and len(d["findings_resolved"]) == 2, d
+# controls: a lone re-wording in a file IS a change; a pure re-rating (same claim, new severity)
+# is reported too — finding_key is file+claim and excludes severity, so it used to vanish from the
+# delta while _fingerprint still saved a snapshot for it.
+d2 = m.compute_delta(snap([mk("C1", "critical", "old wording")]),
+                     snap([mk("C1", "critical", "new wording")]))
+assert len(d2["findings_changed"]) == 1, d2["findings_changed"]
+d3 = m.compute_delta(snap([mk("C1", "critical", "same claim")]),
+                     snap([mk("M1", "medium", "same claim")]))
+assert len(d3["findings_changed"]) == 1, d3["findings_changed"]
+assert d3["findings_changed"][0]["was_severity"] == "critical", d3["findings_changed"]
+assert d3["findings_changed"][0]["severity"] == "medium", d3["findings_changed"]
+assert not d3["findings_added"] and not d3["findings_resolved"], d3
+# and an untouched finding produces no row at all (the pristine control for the three above)
+d4 = m.compute_delta(snap([mk("C1", "critical", "same claim")]), snap([mk("C1", "critical", "same claim")]))
+assert not d4["findings_changed"] and not d4["findings_added"] and not d4["findings_resolved"], d4
+print("delta pairing OK")
+PD
 echo "ALL TESTS PASSED"
