@@ -31,3 +31,27 @@ def finding_site_key(f):
     """Weaker match: same file, same severity. Lets a re-WORDED finding read as changed rather than
     as one disappearing and another appearing — the reviewer needs to know which of the two it is."""
     return _h(f"{f.get('file','')}|{f.get('severity','')}")
+
+
+def tree_hash(root):
+    """Deterministic content hash of a directory: POSIX-sorted paths + exec bit + sha256 per file.
+
+    Lives here, not in a script loaded by path, because it is the ONE function the vendored-fold
+    proof cannot afford to have swapped: a `tree_hash` that returns whatever the pin claims makes
+    every other check agree. `__pycache__` and `*.pyc` are excluded — they appear from merely
+    running the skill and would make the hash unstable."""
+    import hashlib, os
+    rels = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for fn in filenames:
+            if fn.endswith(".pyc"): continue
+            rels.append(os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/"))
+    h = hashlib.sha256()
+    for rel in sorted(rels):
+        p = os.path.join(root, rel)
+        h.update(rel.encode() + b"\0")
+        h.update((b"x" if os.access(p, os.X_OK) else b"-") + b"\0")
+        with open(p, "rb") as f:
+            h.update(hashlib.sha256(f.read()).hexdigest().encode() + b"\0")
+    return h.hexdigest()

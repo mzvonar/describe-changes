@@ -153,7 +153,7 @@ PY
 # matches the pin again). Every other mode reports the working tree, which is what to hash then.
 VERIFY_REF=""; [ "$COMMITTED_ONLY" = 1 ] && VERIFY_REF="$HEAD_SHA"
 python3 "$HERE/classify-diff.py" --diff "$OUT/raw.diff" --numstat "$OUT/numstat.txt" --out "$OUT" \
-  --root "$ROOT" ${VERIFY_REF:+--verify-ref "$VERIFY_REF"}
+  --root "$ROOT" ${VERIFY_REF:+--verify-ref "$VERIFY_REF"} ${BASE_SHA:+--base-ref "$BASE_SHA"}
 
 # conventions.txt — the authorities a convention finding must cite: written guidelines that govern
 # the changed paths, and the untouched neighbours the new code sits next to. Mechanical on purpose;

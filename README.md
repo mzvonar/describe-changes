@@ -22,9 +22,12 @@ diff in → fold the noise → phases + visual map → the ~3 things a human mus
   `conventions.txt` collects the candidates and the validator rejects an uncited one as taste.
 - **Folded as noise** — a **vendored subtree** proven to be the upstream it names (the review
   question is the pin, not the thousands of copied lines). A copy that differs from its pin is never
-  folded and says so; and when the pin arrives in the same diff — where every local check is the
-  author's own word — the bytes are re-derived from the real remote by shallow-fetching the pinned
-  commit, so a self-consistent pin over attacker code folds nothing. Also pure renames with their
+  folded and says so. When the pin arrives in the same diff, every value in it is the author's own
+  word — hash and `origin` alike — so two things must hold before anything folds: the origin must be
+  one the BASE ref already carries (an earlier review accepted it), and the bytes must re-derive
+  from that origin at the pinned commit via a shallow fetch. A **first** vendoring has no accepted
+  origin yet and is read in full, as is any change that repoints `origin` — deliberately, because
+  adopting an upstream is a human decision. Also pure renames with their
   import rewrites nested under them, moves, splits,
   whitespace/format-only hunks, comment-only hunks, lockfiles, generated files, snapshots, prop
   threading (with a flow of the components the prop passes through), index rows for files the change

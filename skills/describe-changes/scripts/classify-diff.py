@@ -283,15 +283,25 @@ def _read_pin_at(root, ref, rel):
         return None
 
 def _tree_hash_fn():
-    """tree-hash.py is a CLI with a hyphen in its name, so it cannot be imported normally."""
-    import importlib.util
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tree-hash.py")
-    spec = importlib.util.spec_from_file_location("_tree_hash", path)
-    if spec is None or spec.loader is None: return None
-    m = importlib.util.module_from_spec(spec)
-    try: spec.loader.exec_module(m)
-    except Exception: return None
-    return getattr(m, "tree_hash", None)
+    """The hash used by the vendored-fold proof, imported — never exec'd from a path.
+
+    It used to load `tree-hash.py` out of the same directory. That directory is the vendored
+    subtree itself when this skill describes its own vendoring, so the function deciding whether a
+    copy matches its pin could be replaced by one returning whatever the pin claims, and every
+    other check would then agree. Importing `report_keys` keeps one implementation in the module
+    the rest of the run already depends on.
+
+    The residual is worth stating rather than papering over: a skill reviewing a diff that edits
+    the skill runs code from the diff it reviews. No arrangement inside the vendored tree fixes
+    that — it is why an origin that CHANGES in the reviewed diff is not trusted at all (below)."""
+    try:
+        import sys
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path: sys.path.insert(0, here)
+        from report_keys import tree_hash
+        return tree_hash
+    except Exception:
+        return None
 
 def _find_pins(root):
     """Repo-relative paths of every provenance file, from git's index rather than a tree walk.
@@ -382,7 +392,19 @@ def _verify_against_upstream(origin, sha, upstream_path, want_hash, th, timeout=
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-def vendor_scan(root, verify_ref=None, changed=()):
+def _trusted_upstream(root, base_ref, pin_rel):
+    """(origin, upstream_path) as the pin read at `base_ref` — the last state a review accepted.
+
+    Everything in a pin that arrives WITH its change is the author's word, `origin` included.
+    Re-deriving the bytes from that origin proves only that they match a repository the author
+    chose, which an attacker satisfies by pointing it at their own. The origin therefore has to
+    come from somewhere the change under review cannot reach: the base the MR targets."""
+    if not base_ref: return None, None
+    prior = _read_pin_at(root, base_ref, pin_rel)
+    if not prior: return None, None
+    return prior.get("origin"), prior.get("upstream_path")
+
+def vendor_scan(root, verify_ref=None, changed=(), base_ref=None):
     """(verified, notes) — repo-relative subtree paths that are provably their pinned upstream.
 
     `verify_ref` is the commit whose content the report describes; when set (a committed-only
@@ -436,13 +458,27 @@ def vendor_scan(root, verify_ref=None, changed=()):
                 continue
             detail_src = f"from {origin} @ {sha[:7]}, content verified against the pin"
             if pin_rel in changed:
-                # The pin arrives with the change it authorises, so every LOCAL check is the
-                # author's own word. Re-derive the bytes from the real remote or fold nothing.
-                ok, why = _verify_against_upstream(origin, sha, pin.get("upstream_path"), want, th)
+                # The pin arrives with the change it authorises, so every LOCAL check — the hash
+                # included — is the author's own word. Two things must hold before folding:
+                # (1) the ORIGIN is one an earlier review already accepted, read from the base ref,
+                #     because re-deriving from an origin the same diff chose proves only that the
+                #     bytes match a repo the author picked;
+                # (2) the bytes really are that origin's, at the pinned commit.
+                t_origin, t_path = _trusted_upstream(root, base_ref, pin_rel)
+                up_path = pin.get("upstream_path")
+                if not t_origin:
+                    notes.append({"path": rel, "why": "pin introduced by this same change and no accepted origin "
+                                                      "exists at the base — a first vendoring is read in full"})
+                    continue
+                if t_origin != origin or (t_path and t_path != up_path):
+                    notes.append({"path": rel, "why": f"pin introduced by this same change CHANGES the upstream "
+                                                      f"({t_origin} → {origin}) — a new upstream is a human decision, shown in full"})
+                    continue
+                ok, why = _verify_against_upstream(origin, sha, up_path, want, th)
                 if not ok:
                     notes.append({"path": rel, "why": f"pin introduced by this same change and {why} — shown in full"})
                     continue
-                detail_src = f"re-derived from {origin} @ {sha[:7]} itself, not merely from the pin"
+                detail_src = f"re-derived from {origin} @ {sha[:7]} itself — an origin the base already carries"
             verified[rel] = {"origin": origin, "sha": sha[:7] or "?", "pin": pin_rel,
                              "pin_in_diff": pin_rel in changed, "detail_src": detail_src}
     return verified, notes
@@ -576,6 +612,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--diff", required=True); ap.add_argument("--numstat"); ap.add_argument("--out", required=True)
     ap.add_argument("--root", default=None, help="repo root; where vendored-subtree pins are read from")
+    ap.add_argument("--base-ref", default=None,
+                    help="the ref this change targets; the ONLY source of a trusted vendored origin")
     ap.add_argument("--verify-ref", default=None,
                     help="prove vendored subtrees against this commit instead of the working tree "
                          "(set for a committed-only report, whose range is not the working tree)")
@@ -584,7 +622,7 @@ def main():
     files = parse(text)
     os.makedirs(a.out, exist_ok=True)
     root = a.root or _git_toplevel()
-    verified, vendor_notes = vendor_scan(root, a.verify_ref, {f.path for f in files})
+    verified, vendor_notes = vendor_scan(root, a.verify_ref, {f.path for f in files}, a.base_ref)
 
     model_files, folds = [], defaultdict(list)
     lines_changed = lines_sub = 0

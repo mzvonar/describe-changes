@@ -1004,19 +1004,66 @@ def write_pin(sha, body_dir):
         f"origin={origin}\nsha={sha}\nskills=thing\nupstream_path=skills/thing\n"
         f"tree_sha256={th(body_dir)}\n")
 
-# 1. GENUINE vendoring: the copy really is the upstream commit -> folds, and says it was re-derived
+# the consumer's BASE: a commit whose pin names the genuine origin. This is the only place a
+# trusted origin can come from — everything in the diff under review is the author's own word.
+C = lambda *a: subprocess.run(["git", "-C", con, *a], capture_output=True, text=True, check=True)
+subprocess.run(["git", "init", "-q", con], check=True); C("config", "user.email", "c@c"); C("config", "user.name", "c")
 open(os.path.join(sub, "a.py"), "w").write("print('genuine upstream')\n")
 write_pin(up_sha, sub)
-v, n = m.vendor_scan(con, None, {pin_rel})
+C("add", "-A"); C("commit", "-qm", "base: genuine vendoring")
+base = C("rev-parse", "HEAD").stdout.strip()
+
+# 1. GENUINE re-vendor: the copy really is the upstream commit -> folds, and says it was re-derived
+open(os.path.join(sub, "a.py"), "w").write("print('genuine upstream')\n")
+write_pin(up_sha, sub)
+v, n = m.vendor_scan(con, None, {pin_rel}, base)
 assert ".claude/skills/thing" in v, (v, n)
 assert "re-derived" in v[".claude/skills/thing"]["detail_src"], v
 print("  genuine in-diff vendoring folds, re-derived from the remote")
 
-# 2. THE ATTACK: attacker code, self-consistent pin, real origin+sha -> must NOT fold
+# 2. THE ATTACK the origin check exists for: the pin names an ATTACKER'S repo. Every check that
+#    reads the pin passes, and the re-derivation passes too, because the bytes really are in the
+#    repo the pin names. Only an origin the BASE already carries can be trusted.
+eve = os.path.join(T, "evil")
+os.makedirs(os.path.join(eve, "skills/thing"), exist_ok=True)
+E = lambda *a: subprocess.run(["git", "-C", eve, *a], capture_output=True, text=True, check=True)
+subprocess.run(["git", "init", "-q", eve], check=True); E("config", "user.email", "e@e"); E("config", "user.name", "e")
+open(os.path.join(eve, "skills/thing/a.py"), "w").write("print('attacker payload')\n")
+E("add", "-A"); E("commit", "-qm", "payload")
+evil_sha = E("rev-parse", "HEAD").stdout.strip()
+# the attack: payload + a pin pointing at the attacker's own repo, fully self-consistent
+open(os.path.join(sub, "a.py"), "w").write("print('attacker payload')\n")
+open(os.path.join(con, pin_rel), "w").write(
+    f"origin=file://{eve}\nsha={evil_sha}\nskills=thing\nupstream_path=skills/thing\n"
+    f"tree_sha256={th(sub)}\n")
+va, na = m.vendor_scan(con, None, {pin_rel}, base)
+assert ".claude/skills/thing" not in va, "a pin naming an attacker repo folded the payload"
+assert any("CHANGES the upstream" in x["why"] for x in na), na
+print("  attacker-owned origin refused, even though it re-derives cleanly from that repo")
+# control: same payload, but with the ORIGINAL origin -> re-derivation must catch the bytes
+write_pin(up_sha, sub)
+vb, nb = m.vendor_scan(con, None, {pin_rel}, base)
+assert ".claude/skills/thing" not in vb, "payload folded under the genuine origin"
+assert any("does NOT match" in x["why"] for x in nb), nb
+print("  same payload under the genuine origin refused by re-derivation")
+# control: genuine content + genuine origin + a base that carries it -> folds
+open(os.path.join(sub, "a.py"), "w").write("print('genuine upstream')\n")
+write_pin(up_sha, sub)
+vc, _ = m.vendor_scan(con, None, {pin_rel}, base)
+assert ".claude/skills/thing" in vc, vc
+assert "base already carries" in vc[".claude/skills/thing"]["detail_src"], vc
+print("  genuine re-vendor against an accepted origin still folds")
+# a FIRST vendoring has no accepted origin at the base -> read in full, by design
+vd, nd = m.vendor_scan(con, None, {pin_rel}, None)
+assert ".claude/skills/thing" not in vd, vd
+assert any("first vendoring" in x["why"] for x in nd), nd
+print("  a first vendoring (no origin at the base) is read in full")
+
+# 2b. the older attack: attacker code, self-consistent pin, genuine origin+sha -> must NOT fold
 open(os.path.join(sub, "a.py"), "w").write("print('attacker payload')\n")
 write_pin(up_sha, sub)          # hash recomputed over the payload: every LOCAL check passes
 assert th(sub) == open(os.path.join(con, pin_rel)).read().split("tree_sha256=")[1].strip()
-v2, n2 = m.vendor_scan(con, None, {pin_rel})
+v2, n2 = m.vendor_scan(con, None, {pin_rel}, base)
 assert ".claude/skills/thing" not in v2, "attacker payload was folded out of review"
 assert any("does NOT match" in x["why"] for x in n2), n2
 print("  attacker payload refused, and the note says the content does not match upstream")
@@ -1026,13 +1073,13 @@ open(os.path.join(sub, "a.py"), "w").write("print('genuine upstream')\n")
 open(os.path.join(con, pin_rel), "w").write(
     f"origin=file://{T}/does-not-exist\nsha={up_sha}\nskills=thing\nupstream_path=skills/thing\n"
     f"tree_sha256={th(sub)}\n")
-v3, n3 = m.vendor_scan(con, None, {pin_rel})
+v3, n3 = m.vendor_scan(con, None, {pin_rel}, base)
 assert ".claude/skills/thing" not in v3, "an unreachable origin still folded"
 print("  unreachable origin folds nothing (fails closed)")
 
 # 4. control: the SAME pin, not in the diff, still folds cheaply without any network
 write_pin(up_sha, sub)
-v4, _ = m.vendor_scan(con, None, {"src/other.ts"})
+v4, _ = m.vendor_scan(con, None, {"src/other.ts"}, base)
 assert ".claude/skills/thing" in v4, v4
 assert "content verified against the pin" in v4[".claude/skills/thing"]["detail_src"], v4
 assert "re-derived" not in v4[".claude/skills/thing"]["detail_src"], v4
