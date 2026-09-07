@@ -1053,6 +1053,20 @@ vc, _ = m.vendor_scan(con, None, {pin_rel}, base)
 assert ".claude/skills/thing" in vc, vc
 assert "base already carries" in vc[".claude/skills/thing"]["detail_src"], vc
 print("  genuine re-vendor against an accepted origin still folds")
+# a base pin with NO upstream_path is not a free pass: the same trusted origin plus a path the
+# change under review picked is still a path nobody accepted.
+open(os.path.join(sub, "a.py"), "w").write("print('genuine upstream')\n")
+open(os.path.join(con, pin_rel), "w").write(
+    f"origin={origin}\nsha={up_sha}\nskills=thing\ntree_sha256={th(sub)}\n")   # no upstream_path
+C("add", "-A"); C("commit", "-qm", "a base whose pin predates upstream_path")
+base_nopath = C("rev-parse", "HEAD").stdout.strip()
+C("reset", "-q", "--hard", base)                         # back to the ordinary base for what follows
+write_pin(up_sha, sub)                                   # ...and the change ADDS upstream_path
+vp, npth = m.vendor_scan(con, None, {pin_rel}, base_nopath)
+assert ".claude/skills/thing" not in vp, "a base pin without upstream_path let the change add one"
+assert any("upstream_path" in x["why"] for x in npth), npth
+print("  a base with no upstream_path refuses a path the change supplies")
+
 # a FIRST vendoring has no accepted origin at the base -> read in full, by design
 vd, nd = m.vendor_scan(con, None, {pin_rel}, None)
 assert ".claude/skills/thing" not in vd, vd

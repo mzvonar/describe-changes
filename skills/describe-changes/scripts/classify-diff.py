@@ -470,9 +470,16 @@ def vendor_scan(root, verify_ref=None, changed=(), base_ref=None):
                     notes.append({"path": rel, "why": "pin introduced by this same change and no accepted origin "
                                                       "exists at the base — a first vendoring is read in full"})
                     continue
-                if t_origin != origin or (t_path and t_path != up_path):
+                # BOTH halves must match the base, and a base that carries no `upstream_path` counts
+                # as a mismatch rather than a free pass. The `t_path and …` spelling this replaces
+                # let a pin predating `upstream_path` be extended with one — same trusted origin,
+                # but a subtree path nobody had accepted, chosen by the change under review. The
+                # compatibility it bought is one re-vendor wide and self-healing; the hole was not.
+                if t_origin != origin or t_path != up_path:
+                    moved = (f"{t_origin} → {origin}" if t_origin != origin
+                             else f"upstream_path {t_path or '(absent at the base)'} → {up_path}")
                     notes.append({"path": rel, "why": f"pin introduced by this same change CHANGES the upstream "
-                                                      f"({t_origin} → {origin}) — a new upstream is a human decision, shown in full"})
+                                                      f"({moved}) — a new upstream is a human decision, shown in full"})
                     continue
                 ok, why = _verify_against_upstream(origin, sha, up_path, want, th)
                 if not ok:
