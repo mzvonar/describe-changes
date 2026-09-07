@@ -20,6 +20,9 @@ Every event carries: ts, type, repo, range, finding (id/severity/tags/title), sk
 """
 import argparse, json, os, sys, datetime, urllib.request, collections
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from report_keys import finding_key  # noqa: E402  — same stable identity the renderer matches on
+
 HOME = os.environ.get("DESCRIBE_CHANGES_HOME") or os.path.expanduser("~/.describe-changes")
 LESSONS = os.path.join(HOME, "lessons.jsonl")
 CONFIG = os.path.join(HOME, "config.json")
@@ -43,7 +46,12 @@ def load_ctx(d):
     except Exception: pass
     try:
         r = json.load(open(os.path.join(d, "report.json")))
-        ctx["findings"] = {f["id"]: {"id": f["id"], "severity": f["severity"], "tags": f.get("tags", []), "title": f["title"], "file": f["file"]} for f in r["findings"]}
+        # `provenance` rides along so the digest can answer the question the two-pass split was
+        # adopted on faith: do findings from the COLD pass survive human review more often than the
+        # author's own? Without it that stays an opinion for ever.
+        ctx["findings"] = {f["id"]: {"id": f["id"], "key": finding_key(f), "severity": f["severity"], "tags": f.get("tags", []),
+                                     "title": f["title"], "file": f["file"], "provenance": f.get("provenance")}
+                           for f in r["findings"]}
         ctx["checks"] = {c["id"]: {"id": c["id"], "feature": c.get("feature", ""), "surface": c.get("surface", "ui"),
                                    "where": c.get("where", ""), "covered_by": c.get("covered_by")} for c in r.get("how_to_check", [])}
         ctx["repo"] = ctx["repo"] or r.get("repo", "")
@@ -115,21 +123,84 @@ def _jsonl(path):
     return out
 
 def cmd_comments(a):
-    """List comment threads from the report dir (feedback.jsonl + answers.jsonl)."""
+    """List every thread the reader opened: ask-about-a-selection comments AND notes left on cards.
+
+    Notes used to be reachable only through `notes`, a second command — so a reader who typed six of
+    them into finding cards got "no open comments" here and concluded they had been dropped. Two
+    commands meant one of them was forgotten, which is the failure this merge exists to stop. `notes`
+    still exists for the check ticks, which are not threads and are not answerable.
+    """
     fb = _jsonl(os.path.join(a.dir, "feedback.jsonl")); ans = {x["id"]: x for x in _jsonl(os.path.join(a.dir, "answers.jsonl")) if x.get("id")}
     seen = set(); rows = []
+    # Latest note per finding wins — an edited note is one thread, not two. Grouped by the CONTENT
+    # key where the event has one, because a finding id is a position in a severity-sorted list and
+    # gets handed to a different claim when the report is re-authored: grouping on it merges notes
+    # about unrelated findings into one thread and shows the newest as if it answered the oldest.
+    ctx_findings = load_ctx(a.dir)["findings"]
+    live_keys = {f.get("key") for f in ctx_findings.values() if f.get("key")}
+    notes = {}
+    for e in fb:
+        if e.get("type") != "note" or not e.get("text") or not e.get("finding"):
+            continue
+        notes[e.get("finding_key") or ("id:" + e["finding"])] = e
+    for group, e in notes.items():
+        key = e.get("finding_key")
+        # An orphan is a note whose finding is gone or has been re-worded into a different claim.
+        # Say so rather than presenting it as feedback on something in the current report.
+        orphan = not key or (live_keys and key not in live_keys)
+        tid = "note-" + (key if key else e["finding"])
+        rows.append({"id": tid, "kind": "note (on an earlier version)" if orphan else "note",
+                     "ts": e.get("ts"), "text": e["text"], "selection": None, "context": None,
+                     "section": "findings", "finding": e["finding"],
+                     "file": None, "line": None, "side": None, "hunk": None,
+                     "answered": tid in ans})
+    # Notes typed into a VERIFICATION CHECK card. A third type, and it was missing here for exactly
+    # the reason the docstring gives about the second one: a reader wrote "this just shows a generic
+    # error toast and the doc stayed in extracting status" onto a check, `comments` answered "no open
+    # comments", and the report looked like it had received nothing. Any surface a reader can type
+    # into has to come out of ONE command, or the one that is forgotten is silently lost.
+    ctx_checks = load_ctx(a.dir)["checks"]
+    check_notes = {}
+    for e in fb:
+        if e.get("type") != "check_note" or not e.get("text") or not e.get("check"):
+            continue
+        check_notes[e.get("check_key") or ("id:" + e["check"])] = e
+    for group, e in check_notes.items():
+        cid = e["check"]
+        meta = ctx_checks.get(cid) or {}
+        # Same orphan rule as findings: a check id is a position in a list and can be reassigned when
+        # the report is re-authored, so say when the note belongs to a check that is no longer there.
+        orphan = cid not in ctx_checks
+        tid = "checknote-" + (e.get("check_key") or cid)
+        rows.append({"id": tid,
+                     "kind": "note on a check (from an earlier version)" if orphan else "note on a check",
+                     "ts": e.get("ts"), "text": e["text"],
+                     "selection": meta.get("feature") or cid, "context": meta.get("where"),
+                     "section": "how to verify", "finding": e.get("finding"),
+                     "file": None, "line": None, "side": None, "hunk": None,
+                     "answered": tid in ans})
     for e in fb:
         if e.get("type") != "comment" or not e.get("id") or e["id"] in seen: continue
         seen.add(e["id"]); an = e.get("anchor") or {}
-        rows.append({"id": e["id"], "ts": e.get("ts"), "text": e.get("text"), "selection": an.get("text"), "context": an.get("context"),
-                     "section": an.get("section"), "finding": an.get("finding"), "answered": e["id"] in ans})
+        rows.append({"id": e["id"], "kind": "comment", "ts": e.get("ts"), "text": e.get("text"), "selection": an.get("text"), "context": an.get("context"),
+                     "section": an.get("section"), "finding": an.get("finding"),
+                     # Present when the thread was opened on a code diff. The gutter carries the real
+                     # NEW-side line (old-side for a deletion), so this is a location to OPEN, not a
+                     # quote to go grepping for. Absent on a prose selection.
+                     "file": an.get("file"), "line": an.get("line"), "side": an.get("side"), "hunk": an.get("hunk"),
+                     "answered": e["id"] in ans})
     if a.open: rows = [r for r in rows if not r["answered"]]
     if a.json: print(json.dumps(rows, indent=2)); return
     if not rows: print("no " + ("open " if a.open else "") + "comments"); return
     for r in rows:
-        print(f"[{r['id']}] {'answered' if r['answered'] else 'OPEN'} · {r['section']}{(' · ' + r['finding']) if r['finding'] else ''}")
-        print(f"   selection: {r['selection']!r}")
-        print(f"   context:   {(r['context'] or '')[:200]!r}")
+        print(f"[{r['id']}] {'answered' if r['answered'] else 'OPEN'} · {r['kind']} · {r['section']}{(' · ' + r['finding']) if r['finding'] else ''}")
+        if r["file"]:
+            side = "  (a DELETED line — the number is old-side)" if r["side"] == "old" else ""
+            print(f"   at:        {r['file']}{(':' + str(r['line'])) if r['line'] else ''}"
+                  f"{('  [' + r['hunk'] + ']') if r['hunk'] else ''}{side}")
+        if r["selection"] is not None:
+            print(f"   selection: {r['selection']!r}")
+            print(f"   context:   {(r['context'] or '')[:200]!r}")
         print(f"   question:  {r['text']}")
 
 def cmd_notes(a):
@@ -170,13 +241,44 @@ def cmd_answer(a):
     text = a.text if a.text is not None else sys.stdin.read()
     fb = _jsonl(os.path.join(a.dir, "feedback.jsonl"))
     c = next((e for e in fb if e.get("type") == "comment" and e.get("id") == a.id), None)
+    if c is None and a.id.startswith("note-"):
+        # A note left on a finding card is a thread like any other, answerable by the id `comments`
+        # prints. That id is the CONTENT key where the event has one, so an answer stays attached to
+        # the note it answered instead of to whatever finding later inherits the position `C2`.
+        # Falls back to the finding id for events written before the key existed.
+        token = a.id[len("note-"):]
+        note = next((e for e in reversed(fb)
+                     if e.get("type") == "note" and e.get("text")
+                     and (e.get("finding_key") == token or
+                          (not e.get("finding_key") and e.get("finding") == token))), None)
+        if note is not None:
+            c = {"id": a.id, "text": note["text"],
+                 "anchor": {"text": "note on this finding", "section": "findings",
+                            "finding": note.get("finding")}}
+    if c is None and a.id.startswith("checknote-"):
+        # The same for a note left on a VERIFICATION CHECK card. `comments` emits these ids, so
+        # `answer` has to accept them — otherwise the one command that finds the reader's words is
+        # followed by the one that cannot reply to them, which is how a surface ends up unanswerable
+        # while looking supported.
+        token = a.id[len("checknote-"):]
+        note = next((e for e in reversed(fb)
+                     if e.get("type") == "check_note" and e.get("text")
+                     and (e.get("check_key") == token or
+                          (not e.get("check_key") and e.get("check") == token))), None)
+        if note is not None:
+            c = {"id": a.id, "text": note["text"],
+                 "anchor": {"text": "note on this verification check", "section": "how to verify",
+                            "finding": note.get("finding")}}
     if c is None: raise SystemExit(f"comment {a.id} not found in {a.dir}/feedback.jsonl")
     with open(os.path.join(a.dir, "answers.jsonl"), "a") as fh:
         fh.write(json.dumps({"id": a.id, "ts": now(), "text": text.strip()}) + "\n")
     ctx = load_ctx(a.dir); an = c.get("anchor") or {}
     f = ctx["findings"].get(an.get("finding") or "")
+    # `at` distinguishes "the prose did not explain this" from "the CODE raised a question the report
+    # never mentioned" — a different kind of miss, and the one worth mining across reports.
+    at = (an.get("file") + (":" + str(an["line"]) if an.get("line") else "")) if an.get("file") else None
     append([base(ctx, "question", source="comment", comment_id=a.id, text=c.get("text"), selection=an.get("text"),
-                 section=an.get("section"), finding=f, improvement=a.improvement)])
+                 section=an.get("section"), at=at, finding=f, improvement=a.improvement)])
     print(f"answered {a.id}; logged as improvement candidate → {LESSONS}. Re-render the report to show it.")
 
 def cmd_push(a):
@@ -248,6 +350,22 @@ def cmd_digest(a):
         if not rows: continue
         c = collections.Counter(f"{sev_tag(e)[0]} / {','.join(sev_tag(e)[1]) or 'untagged'}" for e in rows)
         print(f"- {label}: {len(rows)}"); [print(f"    - {k}: {v}") for k, v in c.most_common(8)]
+    # Does the cold pass earn its cost? Verdicts per provenance, so the answer comes from the
+    # reader's own reactions rather than from an argument. `noise` and `less` are the cost of a pass;
+    # `more` and `checked` are its yield. If `fresh` findings are dismissed at a higher rate than
+    # `author` ones across a few reports, the second pass is not paying for itself — say so and drop
+    # the gate lower. Only two-pass reports contribute, so this section is silent until one runs.
+    prov_evs = [e for e in evs if (e.get("finding") or {}).get("provenance")]
+    if prov_evs:
+        print("\n## Cold-pass yield (two-pass reports only)")
+        by_prov = collections.defaultdict(collections.Counter)
+        for e in prov_evs:
+            by_prov[e["finding"]["provenance"]][e["type"]] += 1
+        for prov in sorted(by_prov):
+            c = by_prov[prov]
+            kept, dropped = c["more"] + c["checked"], c["noise"] + c["less"]
+            verdict = "" if kept + dropped == 0 else f"  → kept {kept}, dismissed {dropped}"
+            print(f"- {prov}: " + ", ".join(f"{k}={v}" for k, v in c.most_common()) + verdict)
     gut = [e for e in evs if e["type"] == "gut_flag"]
     if gut:
         print(f"\n## Gut-flags on unflagged files ({len(gut)}) — candidate blind spots")

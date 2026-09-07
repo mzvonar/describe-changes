@@ -22,10 +22,17 @@ Keys marked ● are required.
   "summary": "A step can now pick its own model and effort instead of taking the workflow's. Steps that say nothing keep today's behaviour — except for permission mode, where an unset value now means `default` rather than inheriting the daemon's.",
   // Author doubt, as a LIST — one scannable line each, the longer explanation folded behind it.
   // 2–4 items is the useful range; > 6 warns (if everything is doubtful, nothing is).
+  // This is TESTIMONY, not analysis: only the author can say what they guessed at or could not test,
+  // and on a two-pass run it is the ONLY thing the author contributes (findings come from the cold
+  // pass — see SKILL.md §2a/§2b).
   "confession": [
     { "point": "The retry-path e2e never ran — I could not reproduce the fixture locally.",
-      "detail": "Optional; shown only when the reader expands the point. Mechanism, what you tried, what would settle it." },
-    { "point": "`resolveModel`'s fallback is a guess; no test pins it." }
+      "detail": "Optional; shown only when the reader expands the point. Mechanism, what you tried, what would settle it.",
+      // Two-pass runs only: the finding ids the INDEPENDENT pass raised over the same code. An
+      // explicit `[]` means the cold reader looked there and flagged nothing — which is information,
+      // not silence, and renders as an open question. Omit the key entirely on a single-pass run.
+      "corroborated_by": ["C1"] },
+    { "point": "`resolveModel`'s fallback is a guess; no test pins it.", "corroborated_by": [] }
   ],
   "range": "main..feat/3.2 (+ working tree)",                          // optional; meta.json has it
 
@@ -59,7 +66,14 @@ Keys marked ● are required.
       "why_human": "Default policy for unattended sessions is a judgement call with security consequences; no test encodes the intent.",
       "what": "The fallback branch in `resolveMode()` returns 'bypass' instead of the previous 'default'.",
       "file": "src/daemon/executor.ts", "lines": "118-131", "hunks": ["F4H2"],
-      "tags": ["divergence", "auth", "blast-radius"]
+      "tags": ["divergence", "auth", "blast-radius"],
+      // WHO raised it. Optional; set it only on a two-pass run (SKILL.md §2b), and set it on EVERY
+      // finding when you set it on any — a mixed report cannot be read.
+      //   "fresh"  — the cold pass, which had no access to the author's reasoning
+      //   "author" — the author, from knowledge the diff does not carry
+      //   "both"   — raised independently by both, which is the strongest signal in the report
+      // Absent everywhere = single-pass run, and the "Two readings" section does not render.
+      "provenance": "fresh"
       // optional instead of hunks: "before": "…code…", "after": "…code…"
     },
     {

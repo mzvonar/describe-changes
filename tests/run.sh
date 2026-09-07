@@ -473,9 +473,11 @@ model = json.load(open(os.path.join(d, "deltas/001/diff-model.json")))
 full = json.load(open(os.path.join(d, "diff-model.json")))
 narrower = {f["path"] for f in model["files"]} < {f["path"] for f in full["files"]}
 # The full-report sections only a real render emits, and code for the files in THIS range:
-# `<div class="diff">` lives inside the file-store JSON, so look for it there, not in the markup.
+# a `.diff` block lives inside the file-store JSON, so look for it there, not in the markup.
+# Matched on the opening tag only — the element carries attributes (`data-file`, for the line
+# gutter), and pinning the whole tag made this fail on a change that added one.
 has_code = ('id="folded"' in h and 'id="unreviewed"' in h
-            and any('<div class="diff">' in v.get("html", "") for v in store.values()))
+            and any('<div class="diff"' in v.get("html", "") for v in store.values()))
 scoped = set(store) == {f["path"] for f in model["files"]}
 ok = not dead and narrower and has_code and scoped
 print("delta page OK" if ok else f"FAIL dead={dead} narrower={narrower} code={has_code} scoped={scoped}")
@@ -536,6 +538,66 @@ grep -q "Diverges from" "$OUT/index.html" && grep -q 'data-loc="docs/adr/0007-ne
 mv "$OUT/report-real.json" "$OUT/report.json"; python3 "$S/render-report.py" --dir "$OUT" >/dev/null
 echo "convention citations OK"
 
+# --- Two readings: provenance + the divergence between the passes (1.8.0) --------------------
+# The value of a second, independent pass is knowing which findings the author did NOT see coming.
+# A merged list destroys that, so the split has to survive validation AND reach the page.
+cp "$OUT/report.json" "$OUT/report-single.json"
+python3 - "$OUT" <<'PY'
+import json, os, sys
+d = sys.argv[1]; r = json.load(open(os.path.join(d, "report.json")))
+base = r["findings"][0]
+r["findings"] = [
+    dict(base, id="C1", severity="critical", provenance="fresh", title="Cold pass caught this one"),
+    dict(base, id="M1", severity="medium", provenance="both", title="Both passes caught this one"),
+]
+r["confession"] = [
+    {"point": "I could not test the retry path.", "corroborated_by": ["M1"]},
+    {"point": "The fallback in resolveModel is a guess.", "corroborated_by": []},
+]
+json.dump(r, open(os.path.join(d, "two-pass.json"), "w"))
+# Partly-tagged: an untagged finding is indistinguishable from one the cold pass missed, which
+# inverts the meaning of the whole section. Must be rejected.
+half = json.loads(json.dumps(r)); half["findings"][1].pop("provenance")
+json.dump(half, open(os.path.join(d, "half-tagged.json"), "w"))
+# A corroborated_by pointing at a finding that does not exist would cite an id the reader cannot find.
+ghost = json.loads(json.dumps(r)); ghost["confession"][0]["corroborated_by"] = ["C9"]
+json.dump(ghost, open(os.path.join(d, "prov-ghost.json"), "w"))
+bad = json.loads(json.dumps(r)); bad["findings"][0]["provenance"] = "implementer"
+json.dump(bad, open(os.path.join(d, "prov-bad.json"), "w"))
+PY
+python3 "$S/check-report.py" "$OUT/two-pass.json" >/dev/null || fail "a valid two-pass report must pass"
+for bad in half-tagged prov-ghost prov-bad; do
+  if python3 "$S/check-report.py" "$OUT/$bad.json" >/dev/null 2>&1; then fail "check-report accepted $bad"; fi
+done
+HALF_MSG="$(python3 "$S/check-report.py" "$OUT/half-tagged.json" 2>&1 || true)"
+case "$HALF_MSG" in *provenance*) ;; *) fail "the rejection must name provenance: $HALF_MSG" ;; esac
+# The section renders, names all three groups, and the TOC entry points at a section that exists.
+cp "$OUT/two-pass.json" "$OUT/report.json"; python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+grep -q 'id="two-readings"' "$OUT/index.html" || fail "no Two readings section on a two-pass report"
+grep -q 'href="#two-readings"' "$OUT/index.html" || fail "Two readings missing from the TOC"
+grep -q "The author did not flag these" "$OUT/index.html" || fail "blind spots group missing"
+grep -q "Declared, but nothing was found there" "$OUT/index.html" || fail "uncorroborated-doubt group missing"
+grep -q "Both arrived at these" "$OUT/index.html" || fail "agreement group missing"
+grep -q 'class="prov prov-fresh"' "$OUT/index.html" || fail "provenance badge missing from the finding card"
+# A finding BOTH passes raised is corroboration, not a blind spot — it must not appear in the first
+# group, or the section that exists to say "the author missed this" says it about something they did
+# not miss. Asserted on the section's own slice, since M1's title appears on its card too.
+python3 - "$OUT/index.html" <<'PY' || fail "a corroborated finding is listed as a blind spot"
+import re, sys
+h = open(sys.argv[1]).read()
+sec = h.split('id="two-readings"', 1)[1].split("</section>", 1)[0]
+# Slice to the group's own </ul>: the first </div> closes the inner .empty blurb, not the group.
+blind = sec.split("The author did not flag these", 1)[1].split("</ul>", 1)[0]
+assert "Cold pass caught this one" in blind, "the fresh-only finding is missing from blind spots"
+assert "Both passes caught this one" not in blind, "a corroborated finding leaked into blind spots"
+print("two readings OK")
+PY
+# …and a single-pass report renders NO section and NO nav entry pointing at nothing.
+cp "$OUT/report-single.json" "$OUT/report.json"; python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+grep -q 'id="two-readings"' "$OUT/index.html" && fail "single-pass report must not render Two readings"
+grep -q 'href="#two-readings"' "$OUT/index.html" && fail "single-pass report must not link Two readings"
+echo "two-pass provenance OK"
+
 # feedback round trip
 printf '%s\n' '{"ts":"2026-01-01T00:00:00Z","type":"less","finding":"C1","report_id":"x"}' '{"ts":"2026-01-01T00:00:01Z","type":"gut_flag","file":"script.py","report_id":"x"}' > "$OUT/feedback.jsonl"
 python3 "$S/feedback.py" ingest "$OUT/feedback.jsonl" --dir "$OUT" | grep -q "ingested 2" || fail "ingest"
@@ -558,6 +620,52 @@ python3 "$S/feedback.py" comments --dir "$OUT" --open | grep -q 'no open comment
 python3 "$S/render-report.py" --dir "$OUT" >/dev/null
 grep -q 'id="t-cabc"' "$OUT/index.html" && grep -q '<code>db.upsert</code>' "$OUT/index.html" || fail "thread/answer not rendered"
 python3 "$S/feedback.py" digest | grep -q 'improvement: name the persistence' || fail "digest improvement"
+# line comments: every diff line carries a real new-side number, and a comment left on one reports
+# the location rather than only the quoted text. The numbers are what make the thread openable —
+# a gutter that renders an index into the snippet would look identical here and be useless.
+grep -q 'class="ln" role="button"' "$OUT/index.html" || fail "diff lines have no comment gutter"
+# The sheet must own its scroll. Reported from a phone: a diff SHORTER than the sheet has no inner
+# scroll, so the drag chained to the document and the report slid about behind a sheet that looked
+# frozen. Two halves, and both must hold — the containment AND the page lock. The third assertion is
+# the one that actually ratchets: a future opener that sets `.show` itself would skip `lockPage()`
+# and silently reintroduce this, which is invisible to the other two.
+python3 - "$OUT" <<'PY' || fail "the file sheet does not own its scroll (background would scroll instead)"
+import re, sys
+h = open(sys.argv[1] + "/index.html", encoding="utf-8").read()
+sb = re.search(r'\.sheet-b\{([^}]*)\}', h)
+assert sb, "no .sheet-b rule"
+assert "overscroll-behavior:contain" in sb.group(1), "sheet body does not contain its overscroll"
+assert "min-height:0" in sb.group(1), "sheet body cannot shrink below its content in the flex column"
+assert re.search(r'\.diff\{[^}]*overscroll-behavior:contain', h), "diffs do not contain their overscroll"
+assert "lockPage()" in h and "unlockPage()" in h, "the page behind the sheet is never locked"
+# Every place that shows the sheet goes through showSheet(), which is what carries the lock.
+bare = [m for m in re.findall(r'\n[^\n]*sheet\.classList\.add\([\'"]show[\'"]\)[^\n]*', h)
+        if "showSheet" not in m]
+assert not bare, f"a sheet opener bypasses showSheet() and so never locks the page: {bare}"
+print("sheet scroll containment OK")
+PY
+python3 - "$OUT" <<'PY' || fail "gutter line numbers are not real new-side numbers"
+import re, sys, html
+h = open(sys.argv[1] + "/index.html", encoding="utf-8").read()
+# Pick one hunk from the rendered page and re-derive its numbering from its own @@ header.
+m = re.search(r'<div class="diff" data-file="[^"]+"><div class="hh">[^<]*?-\d+(?:,\d+)? \+(\d+)', h)
+assert m, "no diff with an @@ header rendered"
+start = int(m.group(1))
+seg = h[m.end():]
+first = re.search(r'data-n="(\d+)" data-side="(new|old)"', seg)
+assert first, "no numbered line after the header"
+# The first line of a hunk is context or an addition often enough to assert the common case; a
+# leading deletion is old-side and legitimately differs, so only the new-side claim is checked.
+if first.group(2) == "new":
+    assert int(first.group(1)) == start, f"first new-side line {first.group(1)} != @@ start {start}"
+print("gutter numbering OK")
+PY
+printf '%s\n' '{"ts":"2026-01-01T00:00:07Z","type":"comment","id":"cdef","text":"why the cast?","anchor":{"text":"const x = y as any","context":"a\nb\nc","section":"findings","finding":"C1","file":"src/api/users.ts","line":42,"side":"new","hunk":"F3H1"}}' >> "$OUT/feedback.jsonl"
+python3 "$S/feedback.py" comments --dir "$OUT" --open | grep -q 'at:        src/api/users.ts:42' || fail "line comment does not report its location"
+python3 "$S/feedback.py" comments --dir "$OUT" --open | grep -q '\[F3H1\]' || fail "line comment does not report its hunk"
+python3 "$S/feedback.py" answer --dir "$OUT" --id cdef --improvement "explain the cast in the finding" --text "It is narrowed downstream." >/dev/null || fail "answer a line comment"
+python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+grep -q 'src/api/users.ts:42' "$OUT/index.html" || fail "line-comment thread does not show path:line"
 # notes: check ticks + "didn't work" text are readable. `comments` is blind to both by design, so a
 # reader's note used to sit unread while the tooling reported "no open comments".
 printf '%s\n' '{"ts":"2026-01-01T00:00:04Z","type":"check_verified","check":"V1"}' >> "$OUT/feedback.jsonl"
@@ -568,6 +676,77 @@ python3 "$S/feedback.py" notes --dir "$OUT" | grep -q '401 instead of 200' || fa
 python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'intended, ship it' || fail "notes: finding note not reported"
 printf '%s\n' '{"ts":"2026-01-01T00:00:07Z","type":"undo","undo":"check_verified","check":"V1"}' >> "$OUT/feedback.jsonl"
 python3 "$S/feedback.py" notes --dir "$OUT" | grep -q 'un-marked again: V1' || fail "notes: untick not reported"
+# A note typed into a finding card is a THREAD, and must be visible everywhere a comment is —
+# `comments` (one entry point, so it cannot be forgotten again), the card's own box after a
+# re-render, and the Conversation section. A reader who left six notes could find none of them and
+# concluded they had been dropped; they had been stored the whole time.
+python3 "$S/feedback.py" comments --dir "$OUT" --open | grep -q '\[note-C1\] OPEN · note' || fail "a card note is invisible to \`comments\`"
+# On a finding the CURRENT report still renders (an earlier block re-worded C1 into M1), so the
+# replay-into-the-box assertion has a card to land in.
+# The note carries the finding's CONTENT key, which is what the renderer matches on — an event with
+# only an id cannot be placed, because ids get reassigned when the report is re-authored.
+python3 - "$OUT" "$S" <<'PY'
+import json, os, sys
+d, s = sys.argv[1], sys.argv[2]
+sys.path.insert(0, s)
+from report_keys import finding_key
+r = json.load(open(os.path.join(d, "report.json")))
+m1 = next(f for f in r["findings"] if f["id"] == "M1")
+with open(os.path.join(d, "feedback.jsonl"), "a") as fh:
+    fh.write(json.dumps({"ts": "2026-01-01T00:00:07Z", "type": "note", "finding": "M1",
+                         "finding_key": finding_key(m1), "text": "replayed into the box"}) + "\n")
+PY
+python3 "$S/render-report.py" --dir "$OUT" >/dev/null
+grep -q 'replayed into the box</textarea>' "$OUT/index.html" || fail "a card note is not replayed into its box on re-render"
+# The thread id is the CONTENT key, so an answer stays attached to the note it answered rather than
+# to whatever finding later inherits the id. `comments` prints the id to answer with — use that,
+# exactly as the operator would, instead of assuming its shape.
+NOTE_ID="$(python3 "$S/feedback.py" comments --dir "$OUT" --json | python3 -c "
+import json,sys
+rows=[r for r in json.load(sys.stdin) if r['text']=='replayed into the box']
+print(rows[0]['id'] if rows else '')")"
+[ -n "$NOTE_ID" ] || fail "a card note is missing from the comments listing"
+grep -q "id=\"t-$NOTE_ID\"" "$OUT/index.html" || fail "a card note is missing from the Conversation section"
+python3 "$S/feedback.py" answer --dir "$OUT" --id "$NOTE_ID" --improvement "state the intent in the finding" --text "Agreed — noted." | grep -q "answered $NOTE_ID" || fail "a card note cannot be answered"
+python3 "$S/feedback.py" comments --dir "$OUT" --open | grep -q "$NOTE_ID" && fail "an answered note is still open"
+# A finding id is a POSITION in a severity-sorted list, not an identity. Re-authoring the report
+# hands `M1` to a different claim, and a note replayed by id then appears under a finding the reader
+# never wrote it about. That shipped: five of seven cards carried someone else's note. The note must
+# follow the CONTENT, and must not be silently re-attached when its finding is gone.
+python3 - "$OUT" "$S" <<'PY' || fail "a note re-attaches to a DIFFERENT finding that inherited its id"
+import json, os, subprocess, sys
+d, s = sys.argv[1], sys.argv[2]
+sys.path.insert(0, s)
+from report_keys import finding_key
+r = json.load(open(os.path.join(d, "report.json")))
+target = r["findings"][0]
+# The note the reader wrote, keyed to the finding as it was at the time.
+with open(os.path.join(d, "feedback.jsonl"), "a") as fh:
+    fh.write(json.dumps({"ts": "2026-01-02T00:00:00Z", "type": "note", "finding": target["id"],
+                         "finding_key": finding_key(target), "text": "NOTE ABOUT THE ORIGINAL CLAIM"}) + "\n")
+subprocess.run(["python3", os.path.join(s, "render-report.py"), "--dir", d], check=True, capture_output=True)
+h = open(os.path.join(d, "index.html"), encoding="utf-8").read()
+assert "NOTE ABOUT THE ORIGINAL CLAIM" in h, "the note vanished from its own finding"
+# Now re-author: the SAME id, a completely different claim, at a different place.
+r["findings"][0] = dict(target, title="An entirely different claim about something else",
+                        file=r["findings"][-1]["file"])
+json.dump(r, open(os.path.join(d, "report.json"), "w"))
+subprocess.run(["python3", os.path.join(s, "render-report.py"), "--dir", d], check=True, capture_output=True)
+h = open(os.path.join(d, "index.html"), encoding="utf-8").read()
+card = h.split('data-id="' + target["id"] + '"', 1)[1].split("</textarea>", 1)[0]
+assert "NOTE ABOUT THE ORIGINAL CLAIM" not in card, "the note re-attached to the finding that inherited the id"
+# …and it is not lost either: it surfaces as a note on an earlier version.
+assert "NOTE ABOUT THE ORIGINAL CLAIM" in h, "the orphaned note was dropped instead of surfaced"
+assert "no longer in the report" in h, "an orphaned note must say which report it belongs to"
+listing = subprocess.run(["python3", os.path.join(s, "feedback.py"), "comments", "--dir", d],
+                         capture_output=True, text=True).stdout
+assert "earlier version" in listing, f"`comments` must flag an orphaned note, got:\n{listing}"
+print("finding-note identity OK")
+PY
+# Undelivered feedback must be loud, not a muted count: the events are safe in localStorage but
+# Claude has not seen them, and the reader cannot tell those two states apart by looking.
+grep -q 'NOT SENT' "$OUT/index.html" || fail "the footer never shouts about unsent feedback"
+grep -q '\.footer\.warn{' "$OUT/index.html" || fail "no red state for unsent feedback"
 # A tick belongs to the REPORT, not to one browser and not to a positional id. It must survive a
 # re-render, and it must NOT survive an edit to the very steps the reader followed.
 python3 - "$OUT" "$S" <<'PY' || fail "check ticks do not survive a re-render (or survive an edit they should not)"

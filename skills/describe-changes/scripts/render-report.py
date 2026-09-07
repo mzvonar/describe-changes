@@ -10,7 +10,7 @@ import argparse, html, json, os, re, shutil, subprocess, sys, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import importlib.util
 import snapshots
-from report_keys import check_key
+from report_keys import check_key, finding_key
 _spec = importlib.util.spec_from_file_location("classify_diff", os.path.join(os.path.dirname(os.path.abspath(__file__)), "classify-diff.py"))
 classify_diff = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(classify_diff)
 
@@ -69,11 +69,36 @@ def map_list(graph):
     return "\n".join(rows)
 
 def hunk_html(h, path):
+    """One hunk, with a real line-number gutter — the gutter IS the per-line comment control.
+
+    The number is the NEW-side line for context and added lines and the old-side line for deleted
+    ones, so a comment on it carries a `path:line` the author can open in an editor rather than an
+    offset into a snippet only this report can resolve.
+
+    Selecting the code and asking about the selection still works, and must: the gutter is
+    `user-select:none`, so a drag across the code never picks the numbers up, and a click target
+    covering the whole line would have eaten that gesture outright.
+    """
+    hid = getattr(h, "id", "") or ""
+    hattr = f' data-h="{E(hid)}"' if hid else ""
+    old_n, new_n = getattr(h, "old_start", 0) or 0, getattr(h, "new_start", 0) or 0
     lines = []
     for l in h.lines:
-        cls = "a" if l.startswith("+") else "d" if l.startswith("-") else "c"
-        lines.append(f'<div class="l {cls}">{E(l)}</div>')
-    return f'<div class="diff"><div class="hh">{E(path)} {E(h.header.split("@@")[1].strip() if "@@" in h.header else "")} <span style="color:var(--fg3)">[{E(h.id)}]</span></div><pre>{"".join(lines)}</pre></div>'
+        if l.startswith("+"):
+            cls, num, side = "a", new_n, "new"; new_n += 1
+        elif l.startswith("-"):
+            cls, num, side = "d", old_n, "old"; old_n += 1
+        else:
+            cls, num, side = "c", new_n, "new"; new_n += 1; old_n += 1
+        lines.append(
+            f'<div class="l {cls}" data-f="{E(path)}" data-n="{num}" data-side="{side}"{hattr}>'
+            f'<span class="ln" role="button" tabindex="0" title="Comment on {E(path)}:{num}">{num}</span>'
+            f'{E(l)}</div>')
+    head = E(h.header.split("@@")[1].strip() if "@@" in h.header else "")
+    return (f'<div class="diff" data-file="{E(path)}"><div class="hh">{E(path)} {head} '
+            f'<span style="color:var(--fg3)">[{E(hid)}]</span>'
+            f'<span class="hint">💬 tap a line number to comment</span></div>'
+            f'<pre>{"".join(lines)}</pre></div>')
 
 def index_hunks(files):
     idx = {}
@@ -82,15 +107,42 @@ def index_hunks(files):
             h.id = f"F{fi}H{hi}"; idx[h.id] = (h, f.path)
     return idx
 
-def finding_card(f, hunks):
+# Who raised this, when two independent passes ran. Rendered ON the card rather than only in the
+# summary section, because provenance changes how the finding should be read: "both" means two
+# readers who could not see each other's work landed on the same spot, and "fresh" means the author
+# did not see it coming — which is the whole reason the second pass exists.
+PROV_BADGE = {
+    "fresh": ("prov-fresh", "found cold", "Raised by the independent pass, which had no access to the author's reasoning"),
+    "author": ("prov-author", "author", "Raised by the author, from knowledge the diff does not carry"),
+    "both": ("prov-both", "both passes", "Raised independently by BOTH passes — the strongest signal in this report"),
+}
+
+def prov_badge(provenance):
+    entry = PROV_BADGE.get(provenance or "")
+    if not entry:
+        return ""
+    cls, label, title = entry
+    return f'<span class="prov {cls}" title="{E(title)}">{E(label)}</span>'
+
+def finding_card(f, hunks, note=None):
+    """`note` is what the reader last typed into this card's box, replayed from the feedback log.
+
+    Without it the box comes back EMPTY on every re-render and the note is visible nowhere on the
+    page — the reader concludes it was never saved and retypes it, or gives up. It was saved; the
+    report just never showed it back. Reported after a reader left six notes and could find two.
+    """
     sev = f["severity"]; tags = f.get("tags", [])
     loc = f["file"] + (f":{f['lines']}" if f.get("lines") else "")
     snippets = "".join(hunk_html(*hunks[h]) for h in f.get("hunks", []) if h in hunks)
     before_after = ""
     if f.get("before") or f.get("after"):
+        # Analyst-supplied code, not a parsed hunk: there is no line number to anchor a comment to,
+        # so the gutter is an inert placeholder that only keeps the columns aligned with real diffs.
+        # Selecting the text and asking about the selection still reaches these lines.
+        gut = '<span class="ln off">·</span>'
         before_after = '<div class="diff"><pre>' + "".join(
-            f'<div class="l d">{E(l)}</div>' for l in (f.get("before") or "").splitlines()) + "".join(
-            f'<div class="l a">{E(l)}</div>' for l in (f.get("after") or "").splitlines()) + "</pre></div>"
+            f'<div class="l d">{gut}{E(l)}</div>' for l in (f.get("before") or "").splitlines()) + "".join(
+            f'<div class="l a">{gut}{E(l)}</div>' for l in (f.get("after") or "").splitlines()) + "</pre></div>"
     code = snippets or before_after
     # A convention finding is only as good as what it cites, so the citation travels WITH the claim:
     # the reviewer settles "new direction or mistake?" by opening the rule and the neighbour, and a
@@ -106,7 +158,7 @@ def finding_card(f, hunks):
             rows.append(f'<li><span class="loc" data-loc="{E(s)}">⧉ {E(s)}</span>'
                         + (f' — {E(why)}' if why else "") + "</li>")
         div = f'<div class="kv"><b>Diverges from</b><ul class="refs">{"".join(rows)}</ul></div>'
-    return f'''<div class="card sev-{sev}" data-id="{E(f["id"])}" data-sev="{sev}" data-tags="{E(" ".join(tags))}">
+    return f'''<div class="card sev-{sev}" data-id="{E(f["id"])}" data-key="{E(finding_key(f))}" data-sev="{sev}" data-tags="{E(" ".join(tags))}">
   <div class="card-h"><span class="tw">▶</span><span class="pill {sev}">{E(f["id"])}</span>
     <div class="title">{E(f["title"])}<small>{E(loc)}</small></div></div>
   <div class="card-b">
@@ -114,11 +166,12 @@ def finding_card(f, hunks):
     <div class="kv"><b>Why a human</b>{E(f["why_human"])}</div>
     {div}
     {('<div class="kv"><b>What changed</b>' + E(f["what"]) + '</div>') if f.get("what") else ""}
+    {prov_badge(f.get("provenance"))}
     {('<div class="tags">' + "".join(f'<span class="tag">{E(t)}</span>' for t in tags) + '</div>') if tags else ""}
     <div><span class="loc" data-loc="{E(loc)}">⧉ {E(loc)}</span></div>
     {('<details class="more"><summary>Show code</summary>' + code + '</details>') if code else ""}
     <div class="fb"><button data-t="more">▲ More important</button><button data-t="less">▼ Less important</button><button data-t="noise" class="danger">✕ Noise</button><button data-t="checked">✓ Checked</button></div>
-    <div class="fb"><textarea placeholder="Note for the skill (what was wrong / missing / useful)…"></textarea></div>
+    <div class="fb"><textarea placeholder="Note for the skill (what was wrong / missing / useful)…">{E(note or "")}</textarea></div>
   </div></div>'''
 
 def render_confession(conf):
@@ -142,6 +195,76 @@ def render_confession(conf):
         else:
             items.append(f"<li>{point}</li>")
     return '<div class="conf"><b>Author confession</b><ul>' + "".join(items) + "</ul></div>"
+
+def has_two_readings(report):
+    """Did two independent passes run? Decided by the DATA, not by a flag the author sets.
+
+    The TOC is built before the sections, so both need the same answer — computing it twice from
+    different signals is how a nav entry starts pointing at a section that does not exist.
+    """
+    conf = report.get("confession")
+    conf = conf if isinstance(conf, list) else []
+    return any(f.get("provenance") for f in report.get("findings", [])) or any(
+        isinstance(c, dict) and "corroborated_by" in c for c in conf
+    )
+
+def two_readings_section(report, findings):
+    """What the two passes did and did not agree on — rendered only when two of them ran.
+
+    The point of a second, independent pass is not more findings; it is knowing which findings the
+    author never saw coming, and which of their declared doubts an outside reader could not
+    corroborate. Merging both passes into one list destroys exactly that. So the list stays merged
+    (one credibility budget, one ranking) and the DISAGREEMENT is surfaced here instead.
+
+    Three groups, in descending order of what they should change for the reader:
+      • blind spots — the cold pass flagged it and the author's confession never mentions it;
+      • open doubts — the author declared it and the cold pass flagged nothing there, so it is still
+        an open question rather than a cleared one;
+      • corroborated — both arrived at it, which is the strongest signal the report can carry.
+    """
+    if not has_two_readings(report):
+        return ""
+    conf = report.get("confession")
+    conf = conf if isinstance(conf, list) else []
+
+    corroborated_ids = {
+        ref
+        for c in conf
+        if isinstance(c, dict)
+        for ref in (c.get("corroborated_by") or [])
+    }
+    blind = [f for f in findings if f.get("provenance") in {"fresh", "both"} and f["id"] not in corroborated_ids]
+    open_doubts = [c for c in conf if isinstance(c, dict) and c.get("corroborated_by") == []]
+    agreed = [c for c in conf if isinstance(c, dict) and (c.get("corroborated_by") or [])]
+
+    def finding_line(f):
+        loc = E(f["file"] + (f":{f['lines']}" if f.get("lines") else ""))
+        return f'<li><span class="pill {E(f["severity"])}">{E(f["id"])}</span> {E(f["title"])} <span class="loc-plain">{loc}</span></li>'
+
+    b = ['<section id="two-readings"><h2>Two readings <span class="cnt">'
+         'the author wrote the change; an independent pass read it cold</span></h2>']
+    if blind:
+        b.append('<div class="tr-g"><b class="tr-blind">The author did not flag these</b>'
+                 '<div class="empty">Raised by the pass that could not see their reasoning.</div><ul>'
+                 + "".join(finding_line(f) for f in blind) + "</ul></div>")
+    if open_doubts:
+        b.append('<div class="tr-g"><b class="tr-open">Declared, but nothing was found there</b>'
+                 '<div class="empty">The author was unsure; the independent pass flagged nothing. '
+                 'Still open — an outside reader failing to find a problem is not proof there is none.</div><ul>'
+                 + "".join(f"<li>{E(c['point'])}</li>" for c in open_doubts) + "</ul></div>")
+    if agreed:
+        b.append('<div class="tr-g"><b class="tr-agree">Both arrived at these</b>'
+                 '<div class="empty">The author declared the doubt and the independent pass raised it '
+                 'too, without seeing that they had.</div><ul>'
+                 + "".join(
+                     f"<li>{E(c['point'])} <span class=\"loc-plain\">→ "
+                     + ", ".join(E(x) for x in c["corroborated_by"]) + "</span></li>"
+                     for c in agreed)
+                 + "</ul></div>")
+    if not (blind or open_doubts or agreed):
+        b.append('<div class="empty">Both passes landed in the same places.</div>')
+    b.append("</section>")
+    return "".join(b)
 
 CH_LABEL = {"added": "new", "modified": "changed", "removed": "deleted", "moved": "moved", "renamed": "renamed", "split": "split", "unchanged": ""}
 
@@ -553,6 +676,37 @@ def main():
     tpl = open(tpl_path).read()
 
     findings = sorted(report["findings"], key=lambda f: (SEV_ORDER[f["severity"]], int(re.sub(r"\D", "", f["id"]) or 0)))
+
+    def read_jsonl(name):
+        fp = os.path.join(d, name); out = []
+        if os.path.exists(fp):
+            for l in open(fp):
+                try: out.append(json.loads(l))
+                except Exception: pass
+        return out
+    # Notes the reader typed into a finding's box, latest per finding — replayed into the box AND
+    # into the Conversation section. Both, deliberately: the box is where it was written, and the
+    # Conversation is where a reader goes to check "did any of this reach Claude?".
+    #
+    # Matched on `finding_key` — the CONTENT hash — never on the id. `C2` is a position in a
+    # severity-sorted list, not an identity: re-authoring the report hands it to a different claim,
+    # and an id-keyed replay then shows the reader their own note about type safety underneath a
+    # finding about rate limiting. That is not hypothetical, it is what shipped: five of seven cards
+    # carried someone else's note. An event with no key predates this fix and cannot be placed — it
+    # becomes an orphan below rather than being guessed at.
+    keyed_findings = {finding_key(f): f for f in findings}
+    card_notes, orphan_notes = {}, {}
+    for e in read_jsonl("feedback.jsonl"):
+        if e.get("type") != "note" or not e.get("text"):
+            continue
+        key = e.get("finding_key")
+        if key and key in keyed_findings:
+            card_notes[key] = e
+        elif e.get("finding"):
+            # Keep it, flagged: a note the reader took the trouble to write must not evaporate just
+            # because the finding it was about has been resolved or re-worded. Grouped by the id it
+            # was written against, so an edited note stays one thread rather than accumulating.
+            orphan_notes[e["finding"]] = e
     counts = {s: sum(1 for f in findings if f["severity"] == s) for s in SEV_ORDER}
     st = model["stats"]
     # Deliberately NOT keyed on head_sha: report_id is the browser's localStorage bucket, and one
@@ -584,6 +738,7 @@ def main():
     # Listed in the order the page actually renders them — a nav that disagrees with the page is a
     # small lie the reader catches immediately, and it costs the report credibility it needs later.
     b.append('<div class="toc"><a href="#summary">Summary</a><a href="#map">Map</a><a href="#phases">Phases</a><a href="#findings">Review</a>'
+             + ('<a href="#two-readings">Two readings</a>' if has_two_readings(report) else "")
              + ('<a href="#check">How to check</a>' if report.get("how_to_check") else "")
              + '<a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a><a href="#folded">Folded</a></div></header>')
 
@@ -638,10 +793,14 @@ def main():
     b.append('<div class="filter"><button class="on" data-f="all">All</button><button data-f="critical">Critical</button><button data-f="medium">Medium</button><button data-f="low">Low</button>'
              + "".join(f'<button data-f="{E(t)}">{E(t)}</button>' for t in tags) + "</div>")
     if findings:
-        b.extend(finding_card(f, hunks) for f in findings)
+        b.extend(finding_card(f, hunks, (card_notes.get(finding_key(f)) or {}).get("text")) for f in findings)
     else:
         b.append('<div class="empty">Nothing flagged. That is a claim, not a guarantee — the "Everything else" list below is what was looked at.</div>')
     b.append("</section>")
+
+    # Straight after the findings: the reader has just read them, and this says which ones the author
+    # saw coming. Renders to "" on a single-pass run, so the section simply does not exist there.
+    b.append(two_readings_section(report, findings))
 
     # How to check — after the findings (those are the priority) but before the noise, because it is
     # the section a reviewer acts on when they decide not to take the report's word for it.
@@ -669,13 +828,6 @@ def main():
     folded = model.get("folds") or report.get("folded") or []
 
     # Conversation: comments (feedback.jsonl, type=comment) + answers (answers.jsonl)
-    def read_jsonl(name):
-        fp = os.path.join(d, name); out = []
-        if os.path.exists(fp):
-            for l in open(fp):
-                try: out.append(json.loads(l))
-                except Exception: pass
-        return out
     comments = [e for e in read_jsonl("feedback.jsonl") if e.get("type") == "comment" and e.get("id")]
     answers = {a["id"]: a for a in read_jsonl("answers.jsonl") if a.get("id")}
     seen_c = set(); threads = []
@@ -686,14 +838,55 @@ def main():
         paras = [p for p in re.split(r"\n\s*\n", t.strip()) if p.strip()]
         def inl(x): return re.sub(r"`([^`]+)`", lambda m: "<code>" + E(m.group(1)) + "</code>", E(x)).replace("\n", "<br>")
         return "".join(f"<p>{inl(p)}</p>" for p in paras)
-    b.append(f'<section id="conversation"><h2>Conversation <span class="cnt">select any text → Ask</span></h2><div id="threads">')
+    # Card notes are feedback too, and they used to appear NOWHERE after a reload — not in the box
+    # they were typed into, not here. A reader who left six of them could find two comments and
+    # reasonably concluded the rest were dropped. They are answered like any other thread; the id is
+    # derived from the finding so a re-render updates the same block instead of stacking copies.
+    # Thread ids are content-keyed too, so an answer stays attached to the note it answered rather
+    # than to whatever finding later inherits the id.
+    note_threads = [{"id": "note-" + key, "text": e["text"], "kind": "note",
+                     "anchor": {"text": "note on this finding", "section": "findings",
+                                "finding": keyed_findings[key]["id"]}}
+                    for key, e in card_notes.items()]
+    # Orphans render too, marked. Silently dropping them would lose real feedback; silently
+    # re-attaching them is the bug this whole change exists to fix.
+    #
+    # The id is `note-<finding id>` — the id the note was written against, which is what
+    # `feedback.py comments` prints for a keyless event and what any existing answer is filed under.
+    # NOT `hash()`: Python randomises string hashing per process, so that produced a different id on
+    # every render and no answer could ever stay attached. Reusing the positional id is safe HERE and
+    # nowhere else, because the thread is explicitly labelled as belonging to an earlier version — it
+    # makes no claim about the finding that holds the id today.
+    note_threads += [{"id": "note-" + (e.get("finding") or "unknown"), "text": e["text"], "kind": "note",
+                      "anchor": {"text": "note on a finding that is no longer in the report",
+                                 "section": "findings (earlier version)", "finding": e.get("finding")}}
+                     for e in orphan_notes.values()]
+    threads = threads + note_threads
+    # Collapsible, and shut by default once the thread list is long enough to bury the two sections
+    # that follow it. An answered conversation is history: worth keeping, rarely worth scrolling. An
+    # OPEN thread is the exception — something is waiting on the reader — so any unanswered thread
+    # keeps the section expanded regardless of length. A reader's own toggle is remembered and beats
+    # both defaults (see `dc-sec:` in the template).
+    open_threads = sum(1 for c in threads if c["id"] not in answers)
+    collapsed = "1" if (len(threads) > 6 and open_threads == 0) else "0"
+    cnt = f'{len(threads)} — comments, and notes left on findings'
+    if open_threads:
+        cnt = f'{open_threads} open · {cnt}'
+    b.append(f'<section id="conversation"><h2 class="sec-t" data-collapsed="{collapsed}">'
+             f'<span class="lhs"><span class="tw">▼</span>Conversation</span>'
+             f'<span class="cnt">{cnt}</span></h2><div id="threads">')
     for c in reversed(threads):
         ans = answers.get(c["id"]); an = c.get("anchor") or {}
-        b.append('<div class="thread" id="t-' + E(c["id"]) + '"><div class="anchor">“' + E(an.get("text", "")) + '” <small>· ' + E(an.get("section", "")) + ((" · " + E(an["finding"])) if an.get("finding") else "") + '</small></div>'
+        # A thread opened on a diff leads with its location: it is answered by opening `path:line`,
+        # and behind the quoted code that is something the reader has to go hunting for. Mirrors the
+        # client-side `renderThread` — the same thread must not read differently after a re-render.
+        loc = (an["file"] + (f':{an["line"]}' if an.get("line") else "")) if an.get("file") else ""
+        where = f'<span class="loc" data-loc="{E(loc)}">⧉ {E(loc)}</span> ' if loc else ""
+        b.append('<div class="thread" id="t-' + E(c["id"]) + '"><div class="anchor">' + where + '“' + E(an.get("text", "")) + '” <small>· ' + E(an.get("section", "")) + ((" · " + E(an["finding"])) if an.get("finding") else "") + '</small></div>'
                  + '<div class="ctext">' + E(c.get("text", "")) + '</div>'
                  + (('<div class="ans"><b>Claude</b>' + answer_html(ans["text"]) + '</div>') if ans else '<div class="st open">Open — not answered yet</div>')
                  + '</div>')
-    b.append('</div>' + ('<div class="empty" id="threads-empty">No comments yet. Select a word or sentence anywhere above and tap <b>Ask about this</b>.</div>' if not threads else '') + '</section>')
+    b.append('</div>' + ('<div class="empty" id="threads-empty">No comments yet. Select a word or sentence anywhere above and tap <b>Ask about this</b>, or tap the line number beside any line of code.</div>' if not threads else '') + '</section>')
 
     flagged_files = {f["file"] for f in findings}
     rest = [f for f in model["files"] if f["substantive_hunks"] and f["path"] not in flagged_files]

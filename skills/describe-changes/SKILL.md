@@ -89,12 +89,55 @@ sections, PR comments: deferred items are the author's *known* doubts — list t
 `confession`/findings as "known, deferred", and flag any place the code contradicts the note.
 
 If you implemented the change yourself in this session you hold privileged knowledge: **confess** the
-spots you were unsure about, guessed at, or could not test. That goes into `confession` and usually
-into a finding. Self-reported doubt is the cheapest, highest-precision signal this tool has.
+spots you were unsure about, guessed at, or could not test. That goes into `confession`. Self-reported
+doubt is the cheapest, highest-precision signal this tool has.
 
 Write it as a **list of one-line points**, each with an optional `detail` the reader can expand —
 not a paragraph. Two to four items. A confession only works if it is read, and a wall of prose at the
 top of the report is skipped wholesale, which leaves the doubt declared but not delivered.
+
+## 2a. If you wrote the change, you are a WITNESS — not the analyst
+
+**When you implemented the change in this session, and `substantive.diff` is > ~2500 lines, you do
+not write the findings.** Produce `intent` and `confession` — the two things only you can know — then
+hand the findings to a subagent with no memory of building it (§2b). Below that size, or when you are
+already reading the change cold, do both yourself and skip §3b.
+
+The reason is not workload, it is blindness. You cannot flag what you have already decided. The
+failure this exists to catch, observed in a real run: the author left a comment in `duzp.ts` saying a
+required field "collapses inference at every call site". True — but the experiment behind it varied
+one of the two inputs it needed to. An author-written pass repeats the comment, because it *is* the
+author's reasoning. A cold reader re-ran it, found the other half, and the finding became the change
+that turned a shipped production bug into a compile error.
+
+Note what is NOT split: `confession` stays yours and is never handed over or second-guessed. It is
+testimony, not a claim to be verified — nobody else can say what you were unsure about.
+
+## 2b. The cold pass — findings from an agent that did not build it
+
+Spawn ONE subagent with the prompt in `reference/fresh-eyes-prompt.md`. Two rules make or break it:
+
+- **It must not see your findings, your confession, or your reasoning** — only the diff, the model
+  and `conventions.txt`. Show it your conclusions and it will agree with them, and a rubber stamp is
+  indistinguishable from genuine agreement.
+- **It is not there to raise MORE findings.** The credibility budget is unchanged (≤ 3 critical): the
+  report optimises for precision, and a second pass bolted on for recall makes the cap arbitrate by
+  truncation instead of anyone deciding. It replaces your findings, at the same budget.
+
+Then reconcile — a linking job, not a judgement, which is why it is safe for you to do:
+
+1. Tag every finding with `provenance`: `fresh` (the cold pass), `author` (you, from knowledge the
+   diff does not carry — rare, keep it that way), or `both`. All-or-nothing; the validator rejects a
+   partly-tagged report.
+2. For each `confession` point, set `corroborated_by` to the finding ids the cold pass raised over
+   the same code — **`[]` when it flagged nothing there**, which is information, not silence.
+3. Do NOT delete a cold finding because you disagree with it. Answer it in the finding's `what`, or
+   leave it and let the human arbitrate. Deleting your own critique is the bias this whole step
+   exists to remove.
+
+The renderer turns that into a **Two readings** section: what you did not flag, what you flagged that
+nothing corroborated, and what you both landed on independently. That divergence is the product —
+merging the two lists into one silently destroys it.
 
 ## 3. Analyse → write `$OUT/report.json`
 
@@ -214,6 +257,11 @@ Exactly this shape, nothing more:
 3. **Critical + medium findings** as `C1 · title — file:lines → verify question`. Low findings as a
    count only ("+4 low in the report").
 4. **Confession** as one line per point — the same list as the report, no `detail` text.
+4b. **On a two-pass run only**, one line naming the divergence: how many findings the author did not
+   flag, and how many declared doubts the cold pass could not corroborate ("3 of 5 findings were
+   raised cold; 1 declared doubt was not corroborated"). It is the one thing the chat view cannot
+   convey by listing findings, and it is what tells the reader how much of the report is a second
+   opinion. Say nothing here on a single-pass run — silence means one reader, which is the default.
 5. **Folded noise** as one line: "Folded: 3 renames (+11 import rewrites), 6 formatting hunks, 2 lockfiles".
 6. The URLs. For `--chat-only` there is no page to link, so inline the rest: the map as a
    ```mermaid``` block **between the summary and the phases** — same order as the report, and for the
@@ -235,12 +283,22 @@ For each follow-up:
   Prefer showing the one decisive snippet over narrating.
 - **Log it** so the skill learns what the report failed to answer up front:
   `python3 "$S/feedback.py" question "<the question>" --dir "$OUT" [--finding C1] [--answered-by-reading src/x.ts:40-80]`
-- **Fetch page comments.** The report lets the reader select any text (a symbol in the summary, a
-  sentence in a phase, a line in a card) and ask about it. When the user says "check the comments",
-  "I asked something in the report", or at every natural pause:
+- **Fetch page comments.** The report takes reader input FOUR ways, and `comments` returns all of
+  them: selecting any text (a symbol in the summary, a sentence in a phase, a line in a card) and
+  asking about it; **tapping the line number beside any line of code** — every diff in the report
+  carries a gutter, whether it sits in a finding card, a file sheet or a fold; a note typed into a
+  **finding** card; and a note typed into a **verification check** card. Never filter to one type by
+  hand: each surface that was ever left out of this command has been silently lost at least once,
+  the reader having been told "no open comments" while their words sat in `feedback.jsonl`.
+  When the user says "check the comments", "I asked something
+  in the report", or at every natural pause:
   `python3 "$S/feedback.py" comments --dir "$OUT" --open`
-  Each thread carries the selection, its surrounding context, section and finding. Answer from the
-  code (read the symbol, `Grep` its callers/tests; show the one decisive snippet), then store it:
+  Each thread carries the selection, its surrounding context, section and finding; a comment left on
+  code also carries an `at:` line — `path:line` (**new-side**, except on a deleted line, where it is
+  old-side and says so) plus the hunk id. **Open that line before answering.** The reader is looking
+  at it, and a reply reasoned from the ±2 quoted lines alone will miss the surrounding code they can
+  see and you cannot. Then answer from the code (read the symbol, `Grep` its callers/tests; show the
+  one decisive snippet) and store it:
   `python3 "$S/feedback.py" answer --dir "$OUT" --id <id> --improvement "<what the report should have said up front>" --text "<answer; paragraphs + \`code\`>"`
   and re-render (`render-report.py --dir "$OUT"`) so the answer appears in the page's **Conversation**
   section (the URL stays the same; the user reloads). Also echo the answer in chat. Every answered
