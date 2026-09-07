@@ -231,9 +231,91 @@ def classify_hunk(h, ws_sensitive, asi=False):
     if not cats or "substantive" in cats: return "substantive"
     return next(c for c in NOISE_ORDER if c in cats)
 
-def file_noise_kind(f, added_text):
+# ── vendored subtrees ────────────────────────────────────────────────────────────────────────
+# A committed copy of an upstream project is the largest thing a reviewer is asked to read and the
+# least worth reading: the review question is "is the PIN right", not "are these 4,549 lines right".
+# But folding it is only honest while the copy provably IS the upstream it names — and editing a
+# vendored copy in place is a supported workflow, so it WILL happen. Hence: fold on PROOF, never on
+# a path guess. Three outcomes, all reported by vendor_notes():
+#   hash present and matches  → fold as `vendored`, naming the origin and commit
+#   hash present and differs  → fold NOTHING; the copy was edited and that is the change to read
+#   no hash in the pin        → fold NOTHING; the pin proves nothing about the bytes on disk
+# `vendor` / `node_modules` paths keep folding as `generated` via GENERATED_RE — unpinned and
+# unverifiable, they were already noise by path and this does not touch them.
+VENDOR_PINS = (".describe-changes-version", ".vendor-pin")
+
+def _git_toplevel():
+    try:
+        import subprocess
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+def _read_pin(path):
+    kv = {}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1); kv[k.strip()] = v.strip()
+    except OSError:
+        return None
+    return kv or None
+
+def _tree_hash_fn():
+    """tree-hash.py is a CLI with a hyphen in its name, so it cannot be imported normally."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tree-hash.py")
+    spec = importlib.util.spec_from_file_location("_tree_hash", path)
+    if spec is None or spec.loader is None: return None
+    m = importlib.util.module_from_spec(spec)
+    try: spec.loader.exec_module(m)
+    except Exception: return None
+    return getattr(m, "tree_hash", None)
+
+def vendor_scan(root):
+    """(verified, notes) — repo-relative subtree paths that are provably their pinned upstream.
+
+    `notes` records every pin that did NOT yield a fold and why, so an unverified copy is visible
+    rather than silently substantive."""
+    verified, notes = {}, []
+    if not root or not os.path.isdir(root): return verified, notes
+    th = _tree_hash_fn()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "__pycache__")]
+        for pin_name in VENDOR_PINS:
+            if pin_name not in filenames: continue
+            pin = _read_pin(os.path.join(dirpath, pin_name))
+            if not pin: continue
+            origin, sha = pin.get("origin", "?"), (pin.get("sha") or "")
+            want = pin.get("tree_sha256")
+            for sub in (pin.get("skills") or "").split():
+                d = os.path.join(dirpath, sub)
+                if not os.path.isdir(d): continue
+                rel = os.path.relpath(d, root).replace(os.sep, "/")
+                if not want:
+                    notes.append({"path": rel, "why": "pin carries no tree_sha256 — cannot verify"}); continue
+                got = th(d) if th else None
+                if got is None:
+                    notes.append({"path": rel, "why": "tree-hash unavailable — cannot verify"})
+                elif got != want:
+                    notes.append({"path": rel, "why": "copy differs from its pin — edited in place, shown in full"})
+                else:
+                    verified[rel] = {"origin": origin, "sha": sha[:7] or "?"}
+    return verified, notes
+
+def vendored_of(path, verified):
+    """The verified vendored root governing `path`, or None."""
+    for rel, prov in verified.items():
+        if path == rel or path.startswith(rel + "/"): return prov
+    return None
+
+def file_noise_kind(f, added_text, verified=None):
     base = os.path.basename(f.path)
     if f.binary: return "binary"
+    if verified and vendored_of(f.path, verified): return "vendored"
     if base in LOCKFILES: return "lockfile"
     if SNAPSHOT_RE.search(f.path): return "snapshot"
     if GENERATED_RE.search(f.path): return "generated"
@@ -352,7 +434,10 @@ def content_lines(lines):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--diff", required=True); ap.add_argument("--numstat"); ap.add_argument("--out", required=True)
+    ap.add_argument("--root", default=None, help="repo root; vendored-subtree proof is read from the working tree")
     a = ap.parse_args()
+    root = a.root or _git_toplevel()
+    verified, vendor_notes = vendor_scan(root)
     text = open(a.diff, encoding="utf-8", errors="replace").read()
     files = parse(text)
     os.makedirs(a.out, exist_ok=True)
@@ -368,7 +453,7 @@ def main():
         all_added = [l for h in f.hunks for l in h.added]
         ws = ext_of(f.path) in WS_SENSITIVE or ext_of(f.path) == "Makefile"
         asi = ext_of(f.path) in ASI_LANGS
-        noise = file_noise_kind(f, all_added)
+        noise = file_noise_kind(f, all_added, verified)
         hunks = []
         for hi, h in enumerate(f.hunks, 1):
             cat = classify_hunk(h, ws, asi) if noise is None else noise
@@ -396,7 +481,11 @@ def main():
                  "substantive_hunks": sum(1 for h in hunks if h["category"] == "substantive"),
                  "symbols_added": sorted(sym_added[f.path]), "symbols_removed": sorted(sym_removed[f.path])}
         model_files.append(entry)
-        if noise: folds[noise].append({"file": f.path, "hunk_ids": [h["id"] for h in hunks], "detail": f"{f.status}, {len(hunks)} hunks"})
+        if noise:
+            prov = vendored_of(f.path, verified) if noise == "vendored" else None
+            detail = (f"{f.status}, from {prov['origin']} @ {prov['sha']} (content verified against the pin)"
+                      if prov else f"{f.status}, {len(hunks)} hunks")
+            folds[noise].append({"file": f.path, "hunk_ids": [h["id"] for h in hunks], "detail": detail})
         if cat_file == "rename": folds["rename"].append({"file": f.path, "old_path": f.old_path, "hunk_ids": [], "detail": f"{f.old_path} → {f.path} (pure rename, {f.similarity}%)", "followers": []})
 
     # Import-rewrite hunks: attach as followers of the rename/move they reference, else stand-alone fold.
@@ -624,7 +713,13 @@ def main():
         "files": model_files, "folds": fold_list, "symbol_moves": symbol_moves,
         "notes": [f"{e['path']}: whitespace-sensitive language — whitespace hunks kept as substantive"
                   for e in model_files if e["whitespace_sensitive"] and any(
-                      h["category"] == "substantive" and not h["symbol"] for h in e["hunks"])][:20],
+                      h["category"] == "substantive" and not h["symbol"] for h in e["hunks"])][:20]
+                 # A vendored copy that could NOT be proven identical to its pin is shown in full,
+                 # and says so. Without this line the reader cannot tell "no vendored copy here"
+                 # from "a vendored copy was edited and I am reading all of it".
+                 + [f"{n['path']}: vendored copy not folded — {n['why']}"
+                    for n in vendor_notes if any(e["path"] == n["path"] or e["path"].startswith(n["path"] + "/")
+                                                 for e in model_files)][:20],
     }
     json.dump(model, open(os.path.join(a.out, "diff-model.json"), "w"), indent=2)
 

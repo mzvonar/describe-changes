@@ -1,6 +1,6 @@
 ---
 name: describe-changes
-version: "1.10.0"
+version: "1.11.0"
 description: >
   Present an implemented change to a human reviewer the way a human needs it: what was done and why,
   a visual map of the high-level change (who calls whom, where data flows, what moved/split/renamed),
@@ -20,7 +20,8 @@ allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob
 The human is the bottleneck, not the code. You allocate their attention; you do not dump a diff.
 
 **Division of labour (hard rule):** scripts do everything mechanical — range resolution, folding
-(rename/move/split, whitespace/format, imports, prop threading, index rows, working notes), code
+(rename/move/split, whitespace/format, imports, prop threading, index rows, working notes, vendored
+subtrees proven identical to their pin), code
 snippets, HTML, feedback capture. You do only what
 scripts cannot: say what the change *means*, draw the map, and decide the ~3 things a human must check.
 Never re-derive the noise pass by hand, never write HTML, never paste the raw diff into chat.

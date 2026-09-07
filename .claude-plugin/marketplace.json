@@ -8,7 +8,7 @@
       "source": "./",
       "displayName": "Describe Changes (human-first change review)",
       "description": "Present an implemented change for honest human review: intent, phases, visual map, critical/medium/low review spots, folded noise, Q&A, and a feedback loop that sharpens the skill.",
-      "version": "1.10.0",
+      "version": "1.11.0",
       "author": { "name": "Martin Zvonár" },
       "license": "MIT",
       "keywords": ["code-review", "diff", "human-review", "agentic"]

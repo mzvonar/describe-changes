@@ -916,6 +916,55 @@ for path, mutate in [
 print("fingerprint coverage OK")
 PF
 
+# vendored subtrees fold only on PROOF. The whole value is that a reviewer reads the pin instead of
+# thousands of upstream lines — and the whole danger is folding a copy somebody edited in place,
+# which this skill's own workflow encourages. Both directions, plus the unverifiable pin.
+python3 - "$S" "$T" <<'PVEN' || fail "vendored fold"
+import importlib.util, os, sys, hashlib
+S, T = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("cd", S + "/classify-diff.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+th = m._tree_hash_fn(); assert th, "tree-hash helper must load"
+
+root = os.path.join(T, "vend"); sub = os.path.join(root, ".claude/skills/thing")
+os.makedirs(sub, exist_ok=True)
+open(os.path.join(sub, "a.py"), "w").write("print(1)\n")
+open(os.path.join(sub, "b.md"), "w").write("# doc\n")
+pin = os.path.join(root, ".claude/skills/.describe-changes-version")
+def write_pin(h):
+    open(pin, "w").write("# comment line\norigin=https://example.invalid/x.git\nsha=abc1234def\n"
+                         "skills=thing\n" + (f"tree_sha256={h}\n" if h else ""))
+
+# 1. hash matches -> folded, with provenance the reviewer can act on
+write_pin(th(sub))
+verified, notes = m.vendor_scan(root)
+assert ".claude/skills/thing" in verified, (verified, notes)
+assert verified[".claude/skills/thing"]["sha"] == "abc1234", verified
+assert "example.invalid" in verified[".claude/skills/thing"]["origin"], verified
+assert not notes, notes
+class F:
+    def __init__(s_, p): s_.path, s_.binary, s_.status = p, False, "added"
+assert m.file_noise_kind(F(".claude/skills/thing/a.py"), [], verified) == "vendored"
+# the pin itself is NOT under the subtree, so it stays reviewable — it is the thing to review
+assert m.file_noise_kind(F(".claude/skills/.describe-changes-version"), [], verified) != "vendored"
+# and an unrelated file is untouched
+assert m.file_noise_kind(F("src/app.ts"), [], verified) is None
+
+# 2. copy edited in place -> folds NOTHING, and says why
+open(os.path.join(sub, "a.py"), "a").write("print(2)\n")
+verified2, notes2 = m.vendor_scan(root)
+assert not verified2, verified2
+assert any("differs from its pin" in n["why"] for n in notes2), notes2
+assert m.file_noise_kind(F(".claude/skills/thing/a.py"), [], verified2) != "vendored"
+
+# 3. a pin with no content hash proves nothing -> folds nothing, and says why
+write_pin(None)
+verified3, notes3 = m.vendor_scan(root)
+assert not verified3, verified3
+assert any("no tree_sha256" in n["why"] for n in notes3), notes3
+print("vendored fold OK")
+PVEN
+
 # delta pairing: two independent findings in one file must NOT collapse into one "changed" row.
 python3 - "$S" <<'PD' || fail "delta pairing"
 import importlib.util, sys
