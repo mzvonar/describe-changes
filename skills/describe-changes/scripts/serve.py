@@ -41,6 +41,34 @@ def ip_tailscale():
     try: return subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=2).stdout.strip().splitlines()[0]
     except Exception: return ""
 
+ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+def sanitize_event(e):
+    """Reject or repair one posted feedback event. Returns the event, or None to drop it.
+
+    Defence in depth at the DOOR. Everything posted here is replayed into the report's HTML on the
+    next render, so a field that reaches an `innerHTML` sink is attacker-controlled input however
+    carefully the template escapes it — and the template is one missed `esc()` away from an XSS that
+    reads `raw.diff` same-origin. Two rules, both narrow:
+
+      * `id`, `thread` and `rid` are IDENTIFIERS and are spliced into DOM ids and lookups. Anything
+        outside `[A-Za-z0-9_-]{1,64}` is not an id a client of this page ever generates, so it is an
+        attack signature rather than a shape to accommodate — drop the event whole.
+      * `anchor.line` is a line NUMBER. Coerce it; drop the key when it will not coerce.
+
+    This closes the class the template's escaping closes one instance of. Neither replaces the other:
+    a future field could reach a sink without passing through here.
+    """
+    if not isinstance(e, dict): return None
+    for k in ("id", "thread", "rid"):
+        v = e.get(k)
+        if v is not None and not (isinstance(v, str) and ID_RE.match(v)): return None
+    a = e.get("anchor")
+    if isinstance(a, dict) and a.get("line") is not None:
+        try: a["line"] = int(a["line"])
+        except (TypeError, ValueError): a.pop("line", None)
+    return e
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir"); ap.add_argument("--port", type=int, default=8790)
@@ -102,8 +130,12 @@ def main():
                     # that one line breaks digest/render for good. Refuse it at the door instead.
                     if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
                         raise ValueError("events must be a list of objects")
+                    kept = [x for x in (sanitize_event(e) for e in events) if x is not None]
                     with open(fb_path, "a") as fh:
-                        for e in events: fh.write(json.dumps(e) + "\n")
+                        for e in kept: fh.write(json.dumps(e) + "\n")
+                    if len(kept) != len(events):
+                        print(f"feedback: dropped {len(events) - len(kept)} malformed event(s)", flush=True)
+                    events = kept
                     self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
                     self.wfile.write(json.dumps({"ok": True, "stored": len(events)}).encode())
                     print(f"feedback: +{len(events)} → {fb_path}", flush=True)

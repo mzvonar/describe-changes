@@ -72,15 +72,21 @@ def thread_turns(thread_id, feedback_events, answer_events):
     user reply is a genuine new turn and is kept. Without this, every re-answered thread would show
     the superseded text next to the text that replaced it.
 
-    Returns `[{"role": "user"|"claude", "text": str, "ts": str}]`.
+    Returns `[{"role": "user"|"claude", "text": str, "ts": str, "rid": str}]`; `rid` is set on
+    user turns only and is what the page matches its own replayed reply against.
     """
     turns = []
     for e in feedback_events:
         if e.get("type") == "reply" and e.get("thread") == thread_id and (e.get("text") or "").strip():
-            turns.append({"role": "user", "text": e["text"], "ts": e.get("ts") or ""})
+            # `rid` rides along because the RENDERED reply has to carry it: the page replays a
+            # reply it already sent from localStorage, and its only way to know the renderer wrote
+            # that one already is to find the same id in the DOM. Without it the authoring device
+            # appends a second copy on every reload and re-marks the thread open.
+            turns.append({"role": "user", "text": e["text"], "ts": e.get("ts") or "",
+                          "rid": e.get("rid") or e.get("ts") or ""})
     for a in answer_events:
         if a.get("id") == thread_id and (a.get("text") or "").strip():
-            turns.append({"role": "claude", "text": a["text"], "ts": a.get("ts") or ""})
+            turns.append({"role": "claude", "text": a["text"], "ts": a.get("ts") or "", "rid": ""})
     turns.sort(key=lambda t: t["ts"])
     out = []
     for t in turns:

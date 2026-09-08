@@ -688,11 +688,14 @@ __BODY__
   $('#ask-cancel').onclick = () => pop.classList.remove('show');
   const threadsEl = $('#threads');
   const renderThread = c => {
-    if (!threadsEl || $('#t-' + c.id)) return;
+    // getElementById, NOT a selector: `c.id` is reader-supplied and splicing it into a CSS selector
+    // makes the guard bypassable — an id holding a space or a dot ("c1 x", "c1.x") builds a VALID
+    // selector that matches nothing, so the guard passes and the thread renders a second time.
+    if (!threadsEl || document.getElementById('t-' + c.id)) return;
     const d = document.createElement('div'); d.className = 'thread'; d.id = 't-' + c.id;
     // The location leads when there is one: a thread opened from a diff is answered by opening
     // `path:line`, and burying that behind the quoted code makes the reader hunt for it.
-    const where = c.anchor.file ? `<span class="loc" data-loc="${esc(c.anchor.file + (c.anchor.line ? ':' + c.anchor.line : ''))}">⧉ ${esc(c.anchor.file)}${c.anchor.line ? ':' + c.anchor.line : ''}</span> ` : '';
+    const where = c.anchor.file ? `<span class="loc" data-loc="${esc(c.anchor.file + (c.anchor.line ? ':' + c.anchor.line : ''))}">⧉ ${esc(c.anchor.file)}${esc(c.anchor.line ? ':' + c.anchor.line : '')}</span> ` : '';
     d.innerHTML = `<div class="anchor">${where}“${esc(c.anchor.text)}” <small>· ${esc(c.anchor.section)}${c.anchor.finding ? ' · ' + esc(c.anchor.finding) : ''}</small></div><div class="ctext"></div><div class="turns"></div><div class="st open">Waiting for Claude — ask in the session to fetch comments</div><div class="rbox"><textarea class="rin" rows="1" placeholder="Reply to this thread…"></textarea><button class="rsend" data-thread="${esc(c.id)}">Reply</button></div>`;
     d.querySelector('.ctext').textContent = c.text; threadsEl.prepend(d); $('#threads-empty')?.classList.add('hidden');
     d.querySelector('.loc')?.addEventListener('click', async e => { try { await navigator.clipboard.writeText(e.currentTarget.dataset.loc); toast('Copied ' + e.currentTarget.dataset.loc); } catch(err) {} });
@@ -726,7 +729,7 @@ __BODY__
   // is idempotent by the reply's own id, because a reply already written into the page by the
   // renderer must not be duplicated by the replay below.
   const renderReply = e => {
-    const th = $('#t-' + e.thread); if (!th || !e.text) return;
+    const th = document.getElementById('t-' + e.thread); if (!th || !e.text) return;   // see renderThread
     const rid = 'r-' + (e.rid || e.ts); if (th.querySelector('[data-rid="' + CSS.escape(rid) + '"]')) return;
     const turns = th.querySelector('.turns'); if (!turns) return;
     const d = document.createElement('div'); d.className = 'rply'; d.dataset.rid = rid;

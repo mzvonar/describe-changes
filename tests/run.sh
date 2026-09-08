@@ -1205,7 +1205,81 @@ assert m.thread_is_open(m.thread_turns("t1", [], []))
 assert not m.thread_is_open(m.thread_turns("t1", [], [A("t1", "a", "02")]))
 # blank replies are not turns (an empty textarea must not reopen a thread)
 assert not m.thread_is_open(m.thread_turns("t1", [R("t1", "   ", "03")], [A("t1", "a", "02")]))
+# the RENDERED reply has to carry the id the page replays against, or the authoring device appends
+# a second copy on every reload and re-marks an answered thread open.
+t3 = m.thread_turns("t1", [R("t1", "hi", "03")], [])
+assert t3[0]["rid"] == "03", t3          # falls back to ts, exactly as the client does
+fb2 = [{"type": "reply", "thread": "t1", "text": "hi", "ts": "03", "rid": "rm5k2x9qa1"}]
+assert m.thread_turns("t1", fb2, [])[0]["rid"] == "rm5k2x9qa1"
 print("reply threads OK")
 PR
+
+# thread-id / anchor injection: everything posted to /feedback is replayed into the report's HTML on
+# the next render, so an id or a line number is attacker-controlled input that reaches a DOM sink.
+python3 - "$S" <<'PX' || fail "feedback injection"
+import importlib.util, sys, re, os
+S = sys.argv[1]
+spec = importlib.util.spec_from_file_location("sv", S + "/serve.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# ids that build a VALID but non-matching CSS selector are what bypass renderThread's guard
+assert m.sanitize_event({"id": "c1 x"}) is None, "space in id must drop the event"
+assert m.sanitize_event({"id": "c1.x"}) is None, "dot in id must drop the event"
+assert m.sanitize_event({"thread": "a b"}) is None
+assert m.sanitize_event({"rid": "a#b"}) is None
+assert m.sanitize_event({"id": "x" * 65}) is None
+# PRISTINE CONTROLS: the ids this page actually generates must survive, or the guard is a shredder
+assert m.sanitize_event({"id": "cmtroluz6t1la"}), "a real comment id must survive"
+assert m.sanitize_event({"id": "note-7e366573f320"}), "a real note id must survive"
+assert m.sanitize_event({"rid": "rm5k2x9qa1"}), "a real reply id must survive"
+assert m.sanitize_event({"type": "comment", "text": "<img src=x>"}), "text is escaped at render, not dropped here"
+# anchor.line is a NUMBER; a payload there reached an innerHTML sink
+assert "line" not in m.sanitize_event({"id": "c1", "anchor": {"line": "<img src=x onerror=1>"}})["anchor"]
+assert m.sanitize_event({"id": "c1", "anchor": {"line": "60"}})["anchor"]["line"] == 60
+
+# the template half: no unescaped interpolation may reach the thread innerHTML, and no untrusted id
+# may be spliced into a CSS selector
+tpl = open(os.path.join(os.path.dirname(S.rstrip("/")), "assets/template.html"), encoding="utf-8").read()
+where = [l for l in tpl.split("\n") if l.strip().startswith("const where = c.anchor.file")]
+assert len(where) == 1, where
+raw = [x.group(1).strip() for x in re.finditer(r"\$\{([^}]*)\}", where[0])
+       if not x.group(1).strip().startswith("esc(")]
+assert not raw, f"unescaped interpolation reaching innerHTML: {raw}"
+assert "$('#t-' +" not in tpl, "an untrusted id spliced into a CSS selector"
+print("feedback injection OK")
+PX
+
+# hunk truncation: BOTH paths a hunk reaches the page by must be capped, and the cap must cut
+# INSIDE a hunk (an added file is one hunk, so a boundary-only budget never fires on it).
+python3 - "$S" <<'PH' || fail "hunk cap"
+import importlib.util, sys
+S = sys.argv[1]
+spec = importlib.util.spec_from_file_location("cd", S + "/classify-diff.py")
+cd = importlib.util.module_from_spec(spec); spec.loader.exec_module(cd)
+spec = importlib.util.spec_from_file_location("rr", S + "/render-report.py")
+rr = importlib.util.module_from_spec(spec); spec.loader.exec_module(rr)
+
+def mk(n):
+    h = cd.Hunk("@@ -1,0 +1,%d @@" % n, 1, 0, 1, n, "")
+    h.lines = ["+line %d" % i for i in range(n)]
+    h.id = "F1H1"
+    return h
+
+# a single hunk larger than the budget is truncated, not emitted whole
+big = mk(1000)
+html, shown, cut = rr.hunk_html_capped(big, "a.json", 400)
+assert shown == 400 and cut == 600, (shown, cut)
+assert html.count("<div class=\"l") <= 400, html.count("<div class=\"l")
+# the source hunk is NOT mutated — it is shared with the fold store and the finding cards
+assert len(big.lines) == 1000, "hunk_html_capped mutated the caller's hunk"
+# under budget: untouched, nothing cut
+html2, shown2, cut2 = rr.hunk_html_capped(mk(10), "a.json", 400)
+assert (shown2, cut2) == (10, 0), (shown2, cut2)
+# PRISTINE CONTROL: an exactly-at-budget hunk is whole and reports no cut
+assert rr.hunk_html_capped(mk(400), "a.json", 400)[1:] == (400, 0)
+# gutter numbering of a truncated hunk still starts where the hunk starts
+assert ">1<" in html, "truncated hunk lost its line numbering"
+print("hunk cap OK")
+PH
 
 echo "ALL TESTS PASSED"

@@ -268,6 +268,25 @@ def two_readings_section(report, findings):
 
 CH_LABEL = {"added": "new", "modified": "changed", "removed": "deleted", "moved": "moved", "renamed": "renamed", "split": "split", "unchanged": ""}
 
+def hunk_html_capped(h, path, max_lines):
+    """`hunk_html`, showing at most `max_lines` of the hunk's own lines.
+
+    Truncation belongs INSIDE a hunk, not only between hunks: an added file is a SINGLE hunk, so a
+    budget spent only at hunk boundaries never fires on one. Measured: a 227k-line generated seed
+    vendored twice rendered a 130 MB page that no browser opens.
+
+    It lives here, and is used by BOTH stores, because there are two paths a hunk reaches the page
+    by — the substantive file store and the folded `hunk-store` — and capping only the one that
+    happened to blow up leaves the other a single classification branch away from the same failure
+    (a file that trips `GENERATED_RE` puts ALL its hunks in the fold group).
+
+    Returns `(html, lines_shown, lines_cut)`.
+    """
+    if len(h.lines) <= max_lines:
+        return hunk_html(h, path), len(h.lines), 0
+    head = copy.copy(h); head.lines = h.lines[:max(max_lines, 0)]
+    return hunk_html(head, path), len(head.lines), len(h.lines) - len(head.lines)
+
 def fchip(node):
     """Clickable file chip → opens that file's changed code in the sheet."""
     f = node.get("file")
@@ -898,7 +917,8 @@ def main():
                  + '<div class="turns">'
                  + "".join(('<div class="ans"><b>Claude</b>' + answer_html(t["text"]) + '</div>')
                            if t["role"] == "claude" else
-                           ('<div class="rply"><b>You</b><p>' + E(t["text"]).replace("\n", "<br>") + '</p></div>')
+                           ('<div class="rply" data-rid="r-' + E(t.get("rid") or "") + '"><b>You</b><p>'
+                            + E(t["text"]).replace("\n", "<br>") + '</p></div>')
                            for t in turns)
                  + '</div>'
                  + ('<div class="st open">Open — not answered yet</div>' if thread_is_open(turns) else '')
@@ -925,14 +945,8 @@ def main():
             if hid not in hunks: continue
             h, path = hunks[hid]
             if used >= MAX_LINES: cut += len(h.lines); continue
-            # Truncate INSIDE a hunk, not only at its boundary. An added file is one hunk, so a
-            # budget spent only between hunks never fires on it: a 227k-line generated seed went
-            # into the store whole and rendered a 130 MB page no browser would open.
-            if used + len(h.lines) > MAX_LINES:
-                head = copy.copy(h); head.lines = h.lines[:MAX_LINES - used]
-                body.append(hunk_html(head, path)); cut += len(h.lines) - len(head.lines); used = MAX_LINES
-                continue
-            body.append(hunk_html(h, path)); used += len(h.lines)
+            chtml, shown, c = hunk_html_capped(h, path, MAX_LINES - used)
+            body.append(chtml); used += shown; cut += c
         if cut: body.append(f'<div class="empty">… {cut} more lines not shown (open the file for the rest)</div>')
         status = f["status"] + (f' ← {f["old_path"]}' if f.get("old_path") else "") + (f' ← moved from {f["moved_from"]}' if f.get("moved_from") else "")
         store[f["path"]] = {"status": status, "html": "".join(body) or '<div class="empty">no substantive hunks (folded as noise: ' + E(f.get("noise_kind") or ", ".join(sorted({h["category"] for h in f["hunks"]})) or "—") + ')</div>'}
@@ -962,7 +976,14 @@ def main():
         for node in (it, *it.get("followers", []))
         for hid in (node.get("hunk_ids") or [])
     }
-    hunk_store = {hid: hunk_html(*hunks[hid]) for hid in sorted(fold_hunk_ids) if hid in hunks}
+    # Capped like the file store, and for the same reason: every hunk of a whole-file-noise file
+    # (generated, vendored, lockfile, snapshot) lands in its fold group, so this path can carry a
+    # 227k-line file on its own.
+    hunk_store = {}
+    for hid in sorted(fold_hunk_ids):
+        if hid not in hunks: continue
+        chtml, _shown, c = hunk_html_capped(*hunks[hid], MAX_LINES)
+        hunk_store[hid] = chtml + (f'<div class="empty">… {c} more lines not shown (open the file for the rest)</div>' if c else "")
     b.append('<script type="application/json" id="hunk-store">' + json.dumps(hunk_store).replace("</", "<\\/") + '</script>')
     b.append('<div class="sheet-bg" id="sheet-bg"></div><div class="sheet" id="sheet"><div class="sheet-h"><span class="sheet-t" id="sheet-t"></span><button class="btn" id="sheet-x">✕</button></div><div class="sheet-b" id="sheet-b"></div></div>')
 
