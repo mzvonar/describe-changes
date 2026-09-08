@@ -1211,6 +1211,19 @@ t3 = m.thread_turns("t1", [R("t1", "hi", "03")], [])
 assert t3[0]["rid"] == "03", t3          # falls back to ts, exactly as the client does
 fb2 = [{"type": "reply", "thread": "t1", "text": "hi", "ts": "03", "rid": "rm5k2x9qa1"}]
 assert m.thread_turns("t1", fb2, [])[0]["rid"] == "rm5k2x9qa1"
+# the two producers stamp turns DIFFERENTLY — browser `…T12:00:00.200Z`, feedback.py
+# `…T12:00:00+00:00` — and '+' sorts before '.', so a same-second pair used to come out
+# answer-then-reply whatever the real order, leaving an answered thread reading OPEN.
+t4 = m.thread_turns("t1", [R("t1", "reply", "2026-09-08T12:00:00.200Z")],
+                          [A("t1", "answer", "2026-09-08T12:00:00+00:00")])
+assert [x["role"] for x in t4] == ["claude", "user"], t4     # answer 12:00:00.0 precedes reply .200
+assert m.thread_is_open(t4)
+t5 = m.thread_turns("t1", [R("t1", "reply", "2026-09-08T12:00:00.200Z")],
+                          [A("t1", "answer", "2026-09-08T12:00:01+00:00")])
+assert [x["role"] for x in t5] == ["user", "claude"], t5     # answer a second later closes it
+assert not m.thread_is_open(t5), "a later answer must close the thread across ts formats"
+# a stamp that will not parse degrades instead of raising mid-render
+assert m.thread_turns("t1", [R("t1", "reply", "nonsense")], []), "unparseable ts must not drop a turn"
 print("reply threads OK")
 PR
 

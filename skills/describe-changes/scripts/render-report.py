@@ -890,7 +890,24 @@ def main():
                       "anchor": {"text": "note on a finding that is no longer in the report",
                                  "section": "findings (earlier version)", "finding": e.get("finding")}}
                      for e in orphan_notes.values()]
-    threads = threads + note_threads
+    # Notes left on a VERIFICATION CHECK card are threads too, and they were rendered NOWHERE: the
+    # reader typed a question into a check, `feedback.py comments` listed it, an answer was written
+    # against it — and the page showed none of it. The id must match the one the CLI mints, or the
+    # answer attaches to a thread this side never builds.
+    ctx_checks = {c["id"]: c for c in (report.get("how_to_check") or []) if c.get("id")}
+    check_note_ev = {}
+    for e in read_jsonl("feedback.jsonl"):
+        if e.get("type") == "check_note" and e.get("text") and e.get("check"):
+            check_note_ev[e.get("check_key") or ("id:" + e["check"])] = e
+    check_threads = []
+    for e in check_note_ev.values():
+        cid = e["check"]; meta = ctx_checks.get(cid) or {}
+        orphan = cid not in ctx_checks
+        check_threads.append({"id": "checknote-" + (e.get("check_key") or cid), "text": e["text"], "kind": "check_note",
+                              "anchor": {"text": meta.get("feature") or cid,
+                                         "section": "how to verify (from an earlier version)" if orphan else "how to verify",
+                                         "finding": e.get("finding")}})
+    threads = threads + note_threads + check_threads
     # Collapsible, and shut by default once the thread list is long enough to bury the two sections
     # that follow it. An answered conversation is history: worth keeping, rarely worth scrolling. An
     # OPEN thread is the exception — something is waiting on the reader — so any unanswered thread
@@ -979,10 +996,19 @@ def main():
     # Capped like the file store, and for the same reason: every hunk of a whole-file-noise file
     # (generated, vendored, lockfile, snapshot) lands in its fold group, so this path can carry a
     # 227k-line file on its own.
-    hunk_store = {}
+    # Capped per hunk AND in TOTAL. Per-hunk alone is not a bound: every hunk of a whole-file-noise
+    # file (generated, vendored, lockfile, snapshot) lands in its fold group, so a file with many
+    # hunks re-creates the unopenable page one 400-line slice at a time.
+    STORE_MAX = MAX_LINES * 40
+    hunk_store, store_used = {}, 0
     for hid in sorted(fold_hunk_ids):
         if hid not in hunks: continue
-        chtml, _shown, c = hunk_html_capped(*hunks[hid], MAX_LINES)
+        h, hpath = hunks[hid]
+        if store_used >= STORE_MAX:
+            hunk_store[hid] = f'<div class="empty">… {len(h.lines)} lines not shown (the folded store is full — open the file)</div>'
+            continue
+        chtml, shown, c = hunk_html_capped(h, hpath, min(MAX_LINES, STORE_MAX - store_used))
+        store_used += shown
         hunk_store[hid] = chtml + (f'<div class="empty">… {c} more lines not shown (open the file for the rest)</div>' if c else "")
     b.append('<script type="application/json" id="hunk-store">' + json.dumps(hunk_store).replace("</", "<\\/") + '</script>')
     b.append('<div class="sheet-bg" id="sheet-bg"></div><div class="sheet" id="sheet"><div class="sheet-h"><span class="sheet-t" id="sheet-t"></span><button class="btn" id="sheet-x">✕</button></div><div class="sheet-b" id="sheet-b"></div></div>')
@@ -991,7 +1017,9 @@ def main():
     # so a re-render read on a second device — or after clearing site data — showed every card
     # un-verified, silently discarding work someone had actually done. The report dir is the source
     # of truth (serve.py appends to it); localStorage now only carries what has not been sent yet.
-    prior = [{k: v for k, v in e.items() if k in ("ts", "type", "finding", "file", "check", "check_key", "text", "undo", "id", "anchor")}
+    # `thread` and `rid` ride along or a replayed reply has no thread to attach to and no id to be
+    # recognised by — it would look like a new reply about nothing.
+    prior = [{k: v for k, v in e.items() if k in ("ts", "type", "finding", "file", "check", "check_key", "text", "undo", "id", "anchor", "thread", "rid")}
              for e in read_jsonl("feedback.jsonl")][-800:]
     data = {"report_id": report_id, "repo": meta.get("repo", ""), "range_label": meta.get("range_label", ""),
             "prior": prior,

@@ -57,6 +57,25 @@ def tree_hash(root):
     return h.hexdigest()
 
 
+def _ts_key(ts):
+    """Sortable instant from an ISO timestamp, whichever of the two spellings wrote it.
+
+    The page and the CLI stamp turns DIFFERENTLY — the browser writes `…T12:00:00.200Z` and
+    `feedback.py` writes `…T12:00:00+00:00` — so ordering them as raw strings compares `.` against
+    `+`, and `+` sorts first. A reply and an answer landing in the same second therefore came out
+    answer-then-reply whatever the real order, and the thread read OPEN after it had been answered.
+    Measured, not reasoned: `'+' < '.'` is True.
+
+    Falls back to the raw string when a stamp will not parse, so an unexpected format degrades to
+    the old behaviour instead of raising during a render.
+    """
+    import datetime
+    try:
+        return (0, datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp())
+    except (ValueError, TypeError):
+        return (1, str(ts))
+
+
 def thread_turns(thread_id, feedback_events, answer_events):
     """The turns of one conversation thread, after the opening comment, oldest first.
 
@@ -87,7 +106,7 @@ def thread_turns(thread_id, feedback_events, answer_events):
     for a in answer_events:
         if a.get("id") == thread_id and (a.get("text") or "").strip():
             turns.append({"role": "claude", "text": a["text"], "ts": a.get("ts") or "", "rid": ""})
-    turns.sort(key=lambda t: t["ts"])
+    turns.sort(key=lambda t: _ts_key(t["ts"]))
     out = []
     for t in turns:
         if out and out[-1]["role"] == "claude" and t["role"] == "claude":
