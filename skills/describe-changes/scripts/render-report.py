@@ -6,11 +6,11 @@ The LLM never writes HTML: it writes report.json (see reference/report-schema.md
 pulls code snippets straight from raw.diff by hunk id, builds the mermaid map, and lays out the
 cards. Deterministic: same inputs → same HTML.
 """
-import argparse, html, json, os, re, shutil, subprocess, sys, hashlib
+import argparse, copy, html, json, os, re, shutil, subprocess, sys, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import importlib.util
 import snapshots
-from report_keys import check_key, finding_key
+from report_keys import check_key, finding_key, thread_turns, thread_is_open
 _spec = importlib.util.spec_from_file_location("classify_diff", os.path.join(os.path.dirname(os.path.abspath(__file__)), "classify-diff.py"))
 classify_diff = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(classify_diff)
 
@@ -742,6 +742,15 @@ def main():
              + ('<a href="#check">How to check</a>' if report.get("how_to_check") else "")
              + '<a href="#conversation">Conversation</a><a href="#unreviewed">Everything else</a><a href="#folded">Folded</a></div></header>')
 
+    # How to talk back, said once, at the top. A reader who does not know the page takes input reads
+    # it as a document and answers in chat, where the words are not attached to anything — every
+    # surface below is invisible until someone says it exists. One quiet line, dismissible, because
+    # it is scaffolding for the first read and clutter on the tenth.
+    b.append('<div class="howto" id="howto"><span><b>Comment anywhere:</b> select any text and tap '
+             '<b>Ask about this</b> · tap a <b>line number</b> beside any line of code · use the note box on a '
+             'finding or a check · or <b>reply</b> to a thread in Conversation. It all comes back to Claude.'
+             '</span><button id="howto-x" title="Dismiss">✕</button></div>')
+
     # "Since you last read this" comes FIRST, and only when there is a previous snapshot. A report
     # read twice is answering a different question the second time — what moved — and making the
     # returning reader re-scan everything to find out is the same attention tax as an unfolded diff.
@@ -828,8 +837,9 @@ def main():
     folded = model.get("folds") or report.get("folded") or []
 
     # Conversation: comments (feedback.jsonl, type=comment) + answers (answers.jsonl)
-    comments = [e for e in read_jsonl("feedback.jsonl") if e.get("type") == "comment" and e.get("id")]
-    answers = {a["id"]: a for a in read_jsonl("answers.jsonl") if a.get("id")}
+    fb_events = read_jsonl("feedback.jsonl")
+    comments = [e for e in fb_events if e.get("type") == "comment" and e.get("id")]
+    answers_all = [a for a in read_jsonl("answers.jsonl") if a.get("id")]
     seen_c = set(); threads = []
     for c in comments:
         if c["id"] in seen_c: continue
@@ -867,7 +877,8 @@ def main():
     # OPEN thread is the exception — something is waiting on the reader — so any unanswered thread
     # keeps the section expanded regardless of length. A reader's own toggle is remembered and beats
     # both defaults (see `dc-sec:` in the template).
-    open_threads = sum(1 for c in threads if c["id"] not in answers)
+    turns_of = {c["id"]: thread_turns(c["id"], fb_events, answers_all) for c in threads}
+    open_threads = sum(1 for c in threads if thread_is_open(turns_of[c["id"]]))
     collapsed = "1" if (len(threads) > 6 and open_threads == 0) else "0"
     cnt = f'{len(threads)} — comments, and notes left on findings'
     if open_threads:
@@ -876,7 +887,7 @@ def main():
              f'<span class="lhs"><span class="tw">▼</span>Conversation</span>'
              f'<span class="cnt">{cnt}</span></h2><div id="threads">')
     for c in reversed(threads):
-        ans = answers.get(c["id"]); an = c.get("anchor") or {}
+        turns = turns_of[c["id"]]; an = c.get("anchor") or {}
         # A thread opened on a diff leads with its location: it is answered by opening `path:line`,
         # and behind the quoted code that is something the reader has to go hunting for. Mirrors the
         # client-side `renderThread` — the same thread must not read differently after a re-render.
@@ -884,7 +895,18 @@ def main():
         where = f'<span class="loc" data-loc="{E(loc)}">⧉ {E(loc)}</span> ' if loc else ""
         b.append('<div class="thread" id="t-' + E(c["id"]) + '"><div class="anchor">' + where + '“' + E(an.get("text", "")) + '” <small>· ' + E(an.get("section", "")) + ((" · " + E(an["finding"])) if an.get("finding") else "") + '</small></div>'
                  + '<div class="ctext">' + E(c.get("text", "")) + '</div>'
-                 + (('<div class="ans"><b>Claude</b>' + answer_html(ans["text"]) + '</div>') if ans else '<div class="st open">Open — not answered yet</div>')
+                 + '<div class="turns">'
+                 + "".join(('<div class="ans"><b>Claude</b>' + answer_html(t["text"]) + '</div>')
+                           if t["role"] == "claude" else
+                           ('<div class="rply"><b>You</b><p>' + E(t["text"]).replace("\n", "<br>") + '</p></div>')
+                           for t in turns)
+                 + '</div>'
+                 + ('<div class="st open">Open — not answered yet</div>' if thread_is_open(turns) else '')
+                 # The reply box is the thread's own input. It renders on EVERY thread, answered or
+                 # not: a reader who wants to push back on an answer should not have to go and find
+                 # a sentence in the report to select in order to say so.
+                 + '<div class="rbox"><textarea class="rin" rows="1" placeholder="Reply to this thread…"></textarea>'
+                 + '<button class="rsend" data-thread="' + E(c["id"]) + '">Reply</button></div>'
                  + '</div>')
     b.append('</div>' + ('<div class="empty" id="threads-empty">No comments yet. Select a word or sentence anywhere above and tap <b>Ask about this</b>, or tap the line number beside any line of code.</div>' if not threads else '') + '</section>')
 
@@ -903,6 +925,13 @@ def main():
             if hid not in hunks: continue
             h, path = hunks[hid]
             if used >= MAX_LINES: cut += len(h.lines); continue
+            # Truncate INSIDE a hunk, not only at its boundary. An added file is one hunk, so a
+            # budget spent only between hunks never fires on it: a 227k-line generated seed went
+            # into the store whole and rendered a 130 MB page no browser would open.
+            if used + len(h.lines) > MAX_LINES:
+                head = copy.copy(h); head.lines = h.lines[:MAX_LINES - used]
+                body.append(hunk_html(head, path)); cut += len(h.lines) - len(head.lines); used = MAX_LINES
+                continue
             body.append(hunk_html(h, path)); used += len(h.lines)
         if cut: body.append(f'<div class="empty">… {cut} more lines not shown (open the file for the rest)</div>')
         status = f["status"] + (f' ← {f["old_path"]}' if f.get("old_path") else "") + (f' ← moved from {f["moved_from"]}' if f.get("moved_from") else "")

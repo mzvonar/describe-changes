@@ -21,7 +21,7 @@ Every event carries: ts, type, repo, range, finding (id/severity/tags/title), sk
 import argparse, json, os, sys, datetime, urllib.request, collections
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from report_keys import finding_key  # noqa: E402  — same stable identity the renderer matches on
+from report_keys import finding_key, thread_turns, thread_is_open  # noqa: E402  — same stable identity, and the same thread walk, the renderer uses
 
 HOME = os.environ.get("DESCRIBE_CHANGES_HOME") or os.path.expanduser("~/.describe-changes")
 LESSONS = os.path.join(HOME, "lessons.jsonl")
@@ -189,6 +189,13 @@ def cmd_comments(a):
                      # quote to go grepping for. Absent on a prose selection.
                      "file": an.get("file"), "line": an.get("line"), "side": an.get("side"), "hunk": an.get("hunk"),
                      "answered": e["id"] in ans})
+    # A thread is a CONVERSATION: the reader can reply to an answer, so "answered" is not "an answer
+    # exists" but "the last word is Claude's". Derived by the shared walk, so this and the rendered
+    # page can never disagree about what a thread says or whether it still needs a reply.
+    ans_all = _jsonl(os.path.join(a.dir, "answers.jsonl"))
+    for r in rows:
+        r["turns"] = thread_turns(r["id"], fb, ans_all)
+        r["answered"] = not thread_is_open(r["turns"])
     if a.open: rows = [r for r in rows if not r["answered"]]
     if a.json: print(json.dumps(rows, indent=2)); return
     if not rows: print("no " + ("open " if a.open else "") + "comments"); return
@@ -202,6 +209,14 @@ def cmd_comments(a):
             print(f"   selection: {r['selection']!r}")
             print(f"   context:   {(r['context'] or '')[:200]!r}")
         print(f"   question:  {r['text']}")
+        # The rest of the conversation, oldest first. Without it a reply reads as a question with no
+        # subject — the reader is answering something Claude said, and that something has to be here.
+        for t in r["turns"]:
+            who = "Claude:" if t["role"] == "claude" else "THEM:"
+            body = " ".join((t["text"] or "").split())
+            if t["role"] == "claude" and len(body) > 400:
+                body = body[:400] + " …[truncated; the full answer is in answers.jsonl]"
+            print(f"   {who:9} {body}")
 
 def cmd_notes(a):
     """Everything the reader typed or ticked that is NOT a comment thread.

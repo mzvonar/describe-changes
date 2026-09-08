@@ -1,6 +1,6 @@
 ---
 name: describe-changes
-version: "1.15.2"
+version: "1.16.0"
 description: >
   Present an implemented change to a human reviewer the way a human needs it: what was done and why,
   a visual map of the high-level change (who calls whom, where data flows, what moved/split/renamed),
@@ -298,13 +298,24 @@ For each follow-up:
   Prefer showing the one decisive snippet over narrating.
 - **Log it** so the skill learns what the report failed to answer up front:
   `python3 "$S/feedback.py" question "<the question>" --dir "$OUT" [--finding C1] [--answered-by-reading src/x.ts:40-80]`
-- **Fetch page comments.** The report takes reader input FOUR ways, and `comments` returns all of
+- **Fetch page comments.** The report takes reader input FIVE ways, and `comments` returns all of
   them: selecting any text (a symbol in the summary, a sentence in a phase, a line in a card) and
   asking about it; **tapping the line number beside any line of code** — every diff in the report
   carries a gutter, whether it sits in a finding card, a file sheet or a fold; a note typed into a
-  **finding** card; and a note typed into a **verification check** card. Never filter to one type by
+  **finding** card; a note typed into a **verification check** card; and a **reply typed into a
+  thread in the Conversation section**. Never filter to one type by
   hand: each surface that was ever left out of this command has been silently lost at least once,
   the reader having been told "no open comments" while their words sat in `feedback.jsonl`.
+
+  **A thread is a conversation, not a question with an answer.** Every thread carries a reply box,
+  so the reader can push back on what you said without hunting for a sentence to select. `comments`
+  prints the whole thread under the opening question — `Claude:` and `THEM:` turns, oldest first —
+  and **a reply REOPENS the thread**: "answered" means the last word is yours, not that an answer
+  exists somewhere. So `--open` surfaces a replied-to thread again, which is the only thing that
+  stops a reply landing in a thread marked done and never being seen. Read the turns before
+  answering: the reader is responding to something specific you said, and a reply read without it
+  is a question with no subject. Answering again appends a new turn; answering with no reply in
+  between CORRECTS your previous answer rather than adding a second one.
   When the user says "check the comments", "I asked something
   in the report", or at every natural pause:
   `python3 "$S/feedback.py" comments --dir "$OUT" --open`

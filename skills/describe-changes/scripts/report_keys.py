@@ -55,3 +55,44 @@ def tree_hash(root):
         with open(p, "rb") as f:
             h.update(hashlib.sha256(f.read()).hexdigest().encode() + b"\0")
     return h.hexdigest()
+
+
+def thread_turns(thread_id, feedback_events, answer_events):
+    """The turns of one conversation thread, after the opening comment, oldest first.
+
+    A thread is no longer "comment, then Claude answers, the end": the reader can reply to an
+    answer, so it is an alternating conversation and every consumer has to agree on what it says.
+    This lives here, and not in the renderer plus a copy in `feedback.py`, because those two answer
+    the SAME question — what has been said on this thread — and two local walks of one question is
+    how they drift apart. The page and the CLI must show the reader the same conversation.
+
+    Supersede rule: consecutive Claude turns COLLAPSE to the last one. An `answer` written when the
+    previous turn was also Claude's is a correction of that answer, not a second thing said — which
+    is what re-running `feedback.py answer` on a thread has always meant. An answer written after a
+    user reply is a genuine new turn and is kept. Without this, every re-answered thread would show
+    the superseded text next to the text that replaced it.
+
+    Returns `[{"role": "user"|"claude", "text": str, "ts": str}]`.
+    """
+    turns = []
+    for e in feedback_events:
+        if e.get("type") == "reply" and e.get("thread") == thread_id and (e.get("text") or "").strip():
+            turns.append({"role": "user", "text": e["text"], "ts": e.get("ts") or ""})
+    for a in answer_events:
+        if a.get("id") == thread_id and (a.get("text") or "").strip():
+            turns.append({"role": "claude", "text": a["text"], "ts": a.get("ts") or ""})
+    turns.sort(key=lambda t: t["ts"])
+    out = []
+    for t in turns:
+        if out and out[-1]["role"] == "claude" and t["role"] == "claude":
+            out[-1] = t                      # a correction of the answer above it, not a new turn
+        else:
+            out.append(t)
+    return out
+
+
+def thread_is_open(turns):
+    """Open = somebody is waiting on Claude: the thread has no turns yet, or the last one is the
+    reader's. An answered thread the reader has replied to is OPEN again, which is the whole point
+    of allowing replies — otherwise a reply lands in a thread marked done and nothing surfaces it."""
+    return not turns or turns[-1]["role"] == "user"

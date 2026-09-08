@@ -265,6 +265,16 @@ button.fpath:active{border-color:var(--info)}
 .thread .ans p+p{margin-top:.45rem}
 .thread .ans code{background:var(--bg2);padding:0 .3em;border-radius:4px}
 .thread .st{font-size:.72rem;color:var(--fg3);margin-top:.3rem}
+.howto{display:flex;gap:.6rem;align-items:flex-start;background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--info);border-radius:var(--radius);padding:.55rem .8rem;margin:0 0 1rem;font-size:.82rem;color:var(--fg2);line-height:1.5}
+.howto b{color:var(--fg)}
+.howto button{flex:0 0 auto;background:none;border:0;color:var(--fg3);font-size:.9rem;cursor:pointer;padding:0 .2rem;line-height:1.5}
+.howto.hidden{display:none}
+.thread .rply{margin-top:.6rem;padding:.6rem .8rem;background:var(--bg2);border-left:3px solid var(--info);border-radius:6px;font-size:.92rem}
+.thread .rply b{display:block;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--info);margin-bottom:.25rem}
+.thread .rbox{display:flex;gap:.4rem;margin-top:.5rem}
+.thread .rin{flex:1;min-width:0;background:var(--bg2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:.45rem .6rem;font:inherit;font-size:.88rem;resize:vertical}
+.thread .rsend{background:var(--info);color:#04121f;border:0;border-radius:6px;padding:.45rem .9rem;font-weight:700;font-size:.82rem;cursor:pointer}
+.thread .rsend:disabled{opacity:.45;cursor:default}
 .thread .st.open{color:var(--med)}
 /* views toolset */
 .chg{font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:.1rem .4rem;border-radius:4px;margin-left:.4rem;vertical-align:middle}
@@ -683,7 +693,7 @@ __BODY__
     // The location leads when there is one: a thread opened from a diff is answered by opening
     // `path:line`, and burying that behind the quoted code makes the reader hunt for it.
     const where = c.anchor.file ? `<span class="loc" data-loc="${esc(c.anchor.file + (c.anchor.line ? ':' + c.anchor.line : ''))}">⧉ ${esc(c.anchor.file)}${c.anchor.line ? ':' + c.anchor.line : ''}</span> ` : '';
-    d.innerHTML = `<div class="anchor">${where}“${esc(c.anchor.text)}” <small>· ${esc(c.anchor.section)}${c.anchor.finding ? ' · ' + esc(c.anchor.finding) : ''}</small></div><div class="ctext"></div><div class="st open">Waiting for Claude — ask in the session to fetch comments</div>`;
+    d.innerHTML = `<div class="anchor">${where}“${esc(c.anchor.text)}” <small>· ${esc(c.anchor.section)}${c.anchor.finding ? ' · ' + esc(c.anchor.finding) : ''}</small></div><div class="ctext"></div><div class="turns"></div><div class="st open">Waiting for Claude — ask in the session to fetch comments</div><div class="rbox"><textarea class="rin" rows="1" placeholder="Reply to this thread…"></textarea><button class="rsend" data-thread="${esc(c.id)}">Reply</button></div>`;
     d.querySelector('.ctext').textContent = c.text; threadsEl.prepend(d); $('#threads-empty')?.classList.add('hidden');
     d.querySelector('.loc')?.addEventListener('click', async e => { try { await navigator.clipboard.writeText(e.currentTarget.dataset.loc); toast('Copied ' + e.currentTarget.dataset.loc); } catch(err) {} });
   };
@@ -700,6 +710,45 @@ __BODY__
     toast(served ? 'Sent — ask Claude to fetch comments' : 'Saved — Copy JSON to hand it to Claude');
   };
   fb.filter(e => e.type === 'comment' && e.id).forEach(renderThread);
+
+  // The how-to-comment line: scaffolding for a first read, clutter once you know the page. The
+  // dismissal is remembered per report, like every other reader-set preference here.
+  (() => {
+    const el = $('#howto'), k = 'dc-howto:' + (R.report_id || 'x');
+    if (!el) return;
+    try { if (localStorage.getItem(k) === '1') el.classList.add('hidden'); } catch (e) {}
+    $('#howto-x').onclick = () => { el.classList.add('hidden'); try { localStorage.setItem(k, '1'); } catch (e) {} };
+  })();
+
+  // ---- Replying to a thread ------------------------------------------------------------------
+  // A thread is a conversation, not a question with an answer: the reader must be able to push back
+  // on what Claude said without going hunting for a sentence in the report to select. `renderReply`
+  // is idempotent by the reply's own id, because a reply already written into the page by the
+  // renderer must not be duplicated by the replay below.
+  const renderReply = e => {
+    const th = $('#t-' + e.thread); if (!th || !e.text) return;
+    const rid = 'r-' + (e.rid || e.ts); if (th.querySelector('[data-rid="' + CSS.escape(rid) + '"]')) return;
+    const turns = th.querySelector('.turns'); if (!turns) return;
+    const d = document.createElement('div'); d.className = 'rply'; d.dataset.rid = rid;
+    const b = document.createElement('b'); b.textContent = 'You';
+    const pEl = document.createElement('p'); pEl.textContent = e.text;
+    d.append(b, pEl); turns.append(d);
+    // The thread is waiting on Claude again — say so where the reader is looking, and do not leave
+    // an "answered" thread silently holding an unanswered reply.
+    let st = th.querySelector('.st');
+    if (!st) { st = document.createElement('div'); st.className = 'st open'; th.querySelector('.rbox')?.before(st); }
+    st.className = 'st open'; st.textContent = 'Open — replied, waiting for Claude';
+  };
+  document.addEventListener('click', ev => {
+    const btn = ev.target.closest && ev.target.closest('.rsend'); if (!btn) return;
+    const box = btn.closest('.rbox'), ta = box && box.querySelector('.rin');
+    const text = ta ? ta.value.trim() : ''; if (!text) return;
+    const rid = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const e = event('reply', null, {rid, thread: btn.dataset.thread, text});
+    renderReply(e); ta.value = '';
+    toast(served ? 'Reply sent — ask Claude to fetch comments' : 'Reply saved — Copy JSON to hand it to Claude');
+  });
+  fb.filter(e => e.type === 'reply' && e.thread).forEach(renderReply);
 
   // ---- Per-line comments on a code diff -------------------------------------------------------
   // The GUTTER is the control, never the line: dragging across code is how a reader selects it, and

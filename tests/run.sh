@@ -1174,4 +1174,38 @@ d4 = m.compute_delta(snap([mk("C1", "critical", "same claim")]), snap([mk("C1", 
 assert not d4["findings_changed"] and not d4["findings_added"] and not d4["findings_resolved"], d4
 print("delta pairing OK")
 PD
+# reply threads: a thread is a CONVERSATION, and the page and the CLI must read it the same way.
+python3 - "$S" <<'PR' || fail "reply threads"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rk", sys.argv[1] + "/report_keys.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+R = lambda th, t, ts: {"type": "reply", "thread": th, "text": t, "ts": ts}
+A = lambda i, t, ts: {"id": i, "text": t, "ts": ts}
+
+# interleaving, in timestamp order, and only for the thread asked about
+fb = [R("t1", "r1", "03"), R("t1", "r2", "05"), R("other", "leak", "04")]
+an = [A("t1", "a1", "02"), A("t1", "a2", "04"), A("other", "leak", "01")]
+t = m.thread_turns("t1", fb, an)
+assert [(x["role"], x["text"]) for x in t] == [
+    ("claude", "a1"), ("user", "r1"), ("claude", "a2"), ("user", "r2")], t
+
+# supersede: consecutive Claude turns collapse to the LAST — re-running `answer` with no reply in
+# between is a correction, not a second thing said. Without this every re-answered thread shows the
+# superseded text beside the text that replaced it.
+t2 = m.thread_turns("t1", [], [A("t1", "first", "01"), A("t1", "corrected", "02")])
+assert [(x["role"], x["text"]) for x in t2] == [("claude", "corrected")], t2
+
+# a reply REOPENS an answered thread — the point of the feature: otherwise a reply lands in a
+# thread marked done and nothing ever surfaces it.
+assert m.thread_is_open(m.thread_turns("t1", [R("t1", "but what about X", "03")], [A("t1", "a", "02")]))
+# and an unanswered thread is open
+assert m.thread_is_open(m.thread_turns("t1", [], []))
+# PRISTINE CONTROL: an answered thread with no reply is CLOSED. Without this row every assertion
+# above passes on an `is_open` that returns True for everything.
+assert not m.thread_is_open(m.thread_turns("t1", [], [A("t1", "a", "02")]))
+# blank replies are not turns (an empty textarea must not reopen a thread)
+assert not m.thread_is_open(m.thread_turns("t1", [R("t1", "   ", "03")], [A("t1", "a", "02")]))
+print("reply threads OK")
+PR
+
 echo "ALL TESTS PASSED"
