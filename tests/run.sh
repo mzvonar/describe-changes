@@ -1295,4 +1295,43 @@ assert ">1<" in html, "truncated hunk lost its line numbering"
 print("hunk cap OK")
 PH
 
+# thread identity: the renderer and the CLI must derive a note's thread id the SAME way, or an
+# answer is filed under one id and looked up under the other.
+python3 - "$S" <<'PI' || fail "thread identity"
+import importlib.util, sys, re, os
+S = sys.argv[1]
+spec = importlib.util.spec_from_file_location("rk", S + "/report_keys.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# THE regression: a note carrying a finding_key whose finding has since been resolved or re-worded.
+# The renderer used to send it to an orphan branch that minted from the POSITIONAL id while the CLI
+# minted from the key. That state is what FIXING a finding creates, so it was reachable normally.
+dead = {"type": "note", "finding": "C2", "finding_key": "3f2a1b", "text": "x"}
+assert m.note_thread_id(dead) == "note-3f2a1b", m.note_thread_id(dead)
+# identity must not depend on whether the finding is still live — an orphan is a different LABEL
+live = {"type": "note", "finding": "C2", "finding_key": "3f2a1b", "text": "x"}
+assert m.note_thread_id(live) == m.note_thread_id(dead), "liveness must not change identity"
+# legacy events with no key still address by the positional id, as every stored answer expects
+assert m.note_thread_id({"finding": "C1"}) == "note-C1"
+assert m.note_group_key({"finding": "C1"}) == "id:C1"
+assert m.note_group_key(dead) == "3f2a1b"
+# two notes on one finding collapse to one thread; two different findings do not
+assert m.note_group_key(dead) == m.note_group_key({"finding": "C9", "finding_key": "3f2a1b"})
+assert m.note_group_key({"finding": "C1"}) != m.note_group_key({"finding": "C2"})
+# checks take the same shape
+assert m.check_thread_id({"check": "V1", "check_key": "ac85"}) == "checknote-ac85"
+assert m.check_thread_id({"check": "V1"}) == "checknote-V1"
+assert m.check_group_key({"check": "V1"}) == "id:V1"
+
+# STRUCTURAL: neither consumer may build one of these ids by hand again. A parity assertion between
+# two functions that both call the same helper is a tautology and would pass on any input; this is
+# what actually keeps them from re-diverging.
+for f in ("feedback.py", "render-report.py"):
+    src = open(os.path.join(S, f), encoding="utf-8").read()
+    src = re.sub(r"#.*", "", src)                      # comments may name the ids
+    for bad in ('"note-" +', "'note-' +", '"checknote-" +', "'checknote-' +"):
+        assert bad not in src, f"{f} builds a thread id inline: {bad}"
+print("thread identity OK")
+PI
+
 echo "ALL TESTS PASSED"

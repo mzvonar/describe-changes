@@ -21,7 +21,9 @@ Every event carries: ts, type, repo, range, finding (id/severity/tags/title), sk
 import argparse, json, os, sys, datetime, urllib.request, collections
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from report_keys import finding_key, thread_turns, thread_is_open  # noqa: E402  — same stable identity, and the same thread walk, the renderer uses
+from report_keys import (check_key, finding_key, thread_turns, thread_is_open,  # noqa: E402
+                         note_group_key, note_thread_id, check_group_key, check_thread_id)
+# One derivation of every thread identity, shared with the renderer — see report_keys.
 
 HOME = os.environ.get("DESCRIBE_CHANGES_HOME") or os.path.expanduser("~/.describe-changes")
 LESSONS = os.path.join(HOME, "lessons.jsonl")
@@ -142,13 +144,13 @@ def cmd_comments(a):
     for e in fb:
         if e.get("type") != "note" or not e.get("text") or not e.get("finding"):
             continue
-        notes[e.get("finding_key") or ("id:" + e["finding"])] = e
+        notes[note_group_key(e)] = e
     for group, e in notes.items():
         key = e.get("finding_key")
         # An orphan is a note whose finding is gone or has been re-worded into a different claim.
         # Say so rather than presenting it as feedback on something in the current report.
         orphan = not key or (live_keys and key not in live_keys)
-        tid = "note-" + (key if key else e["finding"])
+        tid = note_thread_id(e)
         rows.append({"id": tid, "kind": "note (on an earlier version)" if orphan else "note",
                      "ts": e.get("ts"), "text": e["text"], "selection": None, "context": None,
                      "section": "findings", "finding": e["finding"],
@@ -160,18 +162,22 @@ def cmd_comments(a):
     # comments", and the report looked like it had received nothing. Any surface a reader can type
     # into has to come out of ONE command, or the one that is forgotten is silently lost.
     ctx_checks = load_ctx(a.dir)["checks"]
+    ctx_by_key = {check_key(c): c for c in ctx_checks.values() if isinstance(c, dict)}
     check_notes = {}
     for e in fb:
         if e.get("type") != "check_note" or not e.get("text") or not e.get("check"):
             continue
-        check_notes[e.get("check_key") or ("id:" + e["check"])] = e
+        check_notes[check_group_key(e)] = e
     for group, e in check_notes.items():
         cid = e["check"]
-        meta = ctx_checks.get(cid) or {}
+        # By content key first. `V1` is a POSITION, and a re-authored report hands it to whatever
+        # check now sits there — resolving by it labels an old note with a new feature's name.
+        ck = e.get("check_key")
+        meta = (ctx_by_key.get(ck) if ck else None) or (ctx_checks.get(cid) if not ck else None) or {}
         # Same orphan rule as findings: a check id is a position in a list and can be reassigned when
         # the report is re-authored, so say when the note belongs to a check that is no longer there.
-        orphan = cid not in ctx_checks
-        tid = "checknote-" + (e.get("check_key") or cid)
+        orphan = (ck not in ctx_by_key) if ck else (cid not in ctx_checks)
+        tid = check_thread_id(e)
         rows.append({"id": tid,
                      "kind": "note on a check (from an earlier version)" if orphan else "note on a check",
                      "ts": e.get("ts"), "text": e["text"],

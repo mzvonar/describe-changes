@@ -10,7 +10,8 @@ import argparse, copy, html, json, os, re, shutil, subprocess, sys, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import importlib.util
 import snapshots
-from report_keys import check_key, finding_key, thread_turns, thread_is_open
+from report_keys import (check_key, finding_key, thread_turns, thread_is_open,
+                         note_group_key, note_thread_id, check_group_key, check_thread_id)
 _spec = importlib.util.spec_from_file_location("classify_diff", os.path.join(os.path.dirname(os.path.abspath(__file__)), "classify-diff.py"))
 classify_diff = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(classify_diff)
 
@@ -715,7 +716,8 @@ def main():
     # becomes an orphan below rather than being guessed at.
     keyed_findings = {finding_key(f): f for f in findings}
     card_notes, orphan_notes = {}, {}
-    for e in read_jsonl("feedback.jsonl"):
+    fb_events = read_jsonl("feedback.jsonl")          # read ONCE; every consumer below reuses it
+    for e in fb_events:
         if e.get("type") != "note" or not e.get("text"):
             continue
         key = e.get("finding_key")
@@ -725,7 +727,7 @@ def main():
             # Keep it, flagged: a note the reader took the trouble to write must not evaporate just
             # because the finding it was about has been resolved or re-worded. Grouped by the id it
             # was written against, so an edited note stays one thread rather than accumulating.
-            orphan_notes[e["finding"]] = e
+            orphan_notes[note_group_key(e)] = e
     counts = {s: sum(1 for f in findings if f["severity"] == s) for s in SEV_ORDER}
     st = model["stats"]
     # Deliberately NOT keyed on head_sha: report_id is the browser's localStorage bucket, and one
@@ -873,20 +875,19 @@ def main():
     # derived from the finding so a re-render updates the same block instead of stacking copies.
     # Thread ids are content-keyed too, so an answer stays attached to the note it answered rather
     # than to whatever finding later inherits the id.
-    note_threads = [{"id": "note-" + key, "text": e["text"], "kind": "note",
+    note_threads = [{"id": note_thread_id(e), "text": e["text"], "kind": "note",
                      "anchor": {"text": "note on this finding", "section": "findings",
                                 "finding": keyed_findings[key]["id"]}}
                     for key, e in card_notes.items()]
     # Orphans render too, marked. Silently dropping them would lose real feedback; silently
     # re-attaching them is the bug this whole change exists to fix.
     #
-    # The id is `note-<finding id>` — the id the note was written against, which is what
-    # `feedback.py comments` prints for a keyless event and what any existing answer is filed under.
-    # NOT `hash()`: Python randomises string hashing per process, so that produced a different id on
-    # every render and no answer could ever stay attached. Reusing the positional id is safe HERE and
-    # nowhere else, because the thread is explicitly labelled as belonging to an earlier version — it
-    # makes no claim about the finding that holds the id today.
-    note_threads += [{"id": "note-" + (e.get("finding") or "unknown"), "text": e["text"], "kind": "note",
+    # Same `note_thread_id` as every other note and as the CLI. An orphan is a thread with a
+    # different LABEL, never a different identity: minting from the positional id here is what used
+    # to put the renderer and `feedback.py comments` on different ids for one thread, so a reply
+    # could be stored under one and looked up under the other. NOT `hash()` either — Python
+    # randomises string hashing per process, so no answer could stay attached across renders.
+    note_threads += [{"id": note_thread_id(e), "text": e["text"], "kind": "note",
                       "anchor": {"text": "note on a finding that is no longer in the report",
                                  "section": "findings (earlier version)", "finding": e.get("finding")}}
                      for e in orphan_notes.values()]
@@ -895,15 +896,19 @@ def main():
     # against it — and the page showed none of it. The id must match the one the CLI mints, or the
     # answer attaches to a thread this side never builds.
     ctx_checks = {c["id"]: c for c in (report.get("how_to_check") or []) if c.get("id")}
+    ctx_by_key = {check_key(c): c for c in (report.get("how_to_check") or [])}
     check_note_ev = {}
-    for e in read_jsonl("feedback.jsonl"):
+    for e in fb_events:
         if e.get("type") == "check_note" and e.get("text") and e.get("check"):
-            check_note_ev[e.get("check_key") or ("id:" + e["check"])] = e
+            check_note_ev[check_group_key(e)] = e
     check_threads = []
     for e in check_note_ev.values():
-        cid = e["check"]; meta = ctx_checks.get(cid) or {}
-        orphan = cid not in ctx_checks
-        check_threads.append({"id": "checknote-" + (e.get("check_key") or cid), "text": e["text"], "kind": "check_note",
+        # Metadata by CONTENT key first: `V1` is a position, and a re-authored report hands it to
+        # whatever check now sits there — resolving by it labels an old note with a new feature.
+        cid = e["check"]; ck = e.get("check_key")
+        meta = (ctx_by_key.get(ck) if ck else None) or (ctx_checks.get(cid) if not ck else None) or {}
+        orphan = (ck not in ctx_by_key) if ck else (cid not in ctx_checks)
+        check_threads.append({"id": check_thread_id(e), "text": e["text"], "kind": "check_note",
                               "anchor": {"text": meta.get("feature") or cid,
                                          "section": "how to verify (from an earlier version)" if orphan else "how to verify",
                                          "finding": e.get("finding")}})

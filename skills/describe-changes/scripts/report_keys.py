@@ -121,3 +121,39 @@ def thread_is_open(turns):
     reader's. An answered thread the reader has replied to is OPEN again, which is the whole point
     of allowing replies — otherwise a reply lands in a thread marked done and nothing surfaces it."""
     return not turns or turns[-1]["role"] == "user"
+
+
+# --- Thread identity -----------------------------------------------------------------------------
+# A note is addressed by an id that BOTH the renderer and the CLI must derive the same way, or an
+# answer is filed under one and looked up under the other. They used to derive it separately and
+# agreed in two cases out of three: a note carrying a `finding_key` whose finding had since been
+# resolved or RE-WORDED went to the renderer's orphan branch, which minted from the positional id
+# while the CLI still minted from the key. That state is not exotic — it is what FIXING a finding
+# creates, so it was reachable by the ordinary act of answering a review.
+#
+# These four are the single derivation. Nothing else may build one of these ids by hand; a guard in
+# tests/run.sh asserts neither consumer constructs the `note-` / `checknote-` prefixes inline.
+
+def note_group_key(e):
+    """How note events collapse into ONE thread. An edited note is one thread, not two."""
+    return e.get("finding_key") or ("id:" + (e.get("finding") or "unknown"))
+
+
+def note_thread_id(e):
+    """The id a note thread is addressed by. Content key when there is one, positional id otherwise.
+
+    Deliberately independent of whether the finding is still in the report: an orphan is a thread
+    with a different LABEL, never a different identity, or the reader's reply lands somewhere the
+    answer cannot follow.
+    """
+    return "note-" + (e.get("finding_key") or e.get("finding") or "unknown")
+
+
+def check_group_key(e):
+    """`note_group_key` for a note left on a verification-check card."""
+    return e.get("check_key") or ("id:" + (e.get("check") or "unknown"))
+
+
+def check_thread_id(e):
+    """`note_thread_id` for a note left on a verification-check card."""
+    return "checknote-" + (e.get("check_key") or e.get("check") or "unknown")
