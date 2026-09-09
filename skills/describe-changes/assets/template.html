@@ -174,10 +174,17 @@ button.fpath:active{border-color:var(--info)}
 .ck-mark textarea{width:100%;font:inherit;font-size:.85rem;background:var(--bg2);color:var(--fg);border:1px solid var(--line2);border-radius:8px;padding:.5rem .7rem;min-height:44px;resize:vertical}
 .ck-mark textarea.has{border-color:var(--crit)}
 .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:.3rem;vertical-align:-2px}
-.map{background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);padding:.5rem;overflow:auto;-webkit-overflow-scrolling:touch}
-.map svg{height:auto;display:block;margin:0 auto}
-.map.actual svg{max-width:none!important;width:var(--natural,auto)!important}
-.map-tools{display:flex;justify-content:flex-end;margin:.4rem 0}
+.map{position:relative;background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;height:clamp(240px,58vh,520px);touch-action:none;cursor:grab}
+.map:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+.map.grabbing{cursor:grabbing}
+.map.static{height:auto;padding:.5rem;overflow:auto;cursor:default;touch-action:auto}
+.map-stage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
+.map-stage svg{max-width:none!important;height:auto;display:block}
+.map-tools{display:flex;align-items:center;justify-content:flex-end;gap:.35rem;margin:.4rem 0;flex-wrap:wrap}
+.map-tools .btn{padding:.4rem .7rem;min-width:38px}
+.map-hint{margin-right:auto;color:var(--fg3);font-size:.72rem}
+@media (max-width:560px){.map-hint{display:none}}
+.map-pct{color:var(--fg2);font-size:.75rem;font-family:var(--mono);min-width:3.2em;text-align:right}
 .map-list{font-size:.85rem;color:var(--fg2);font-family:var(--mono);line-height:1.7}
 .map-list .ch-added{color:var(--low)}.map-list .ch-removed{color:var(--crit);text-decoration:line-through}.map-list .ch-modified{color:var(--med)}.map-list .ch-moved,.map-list .ch-renamed,.map-list .ch-split{color:var(--info)}
 .fold .card-h .title{font-weight:500}
@@ -654,7 +661,140 @@ __BODY__
     event(on ? 'gut_flag' : 'undo', null, on ? {file: b.dataset.file} : {undo: 'gut_flag', file: b.dataset.file});
     toast(on ? 'Gut-flag raised — ask Claude to dig into ' + b.dataset.file : 'Gut-flag cleared');
   });
-  const mz=$('#map-zoom'); if(mz){mz.onclick=()=>{const b=$('.map');b.classList.toggle('actual');mz.textContent=b.classList.contains('actual')?'Fit to screen':'Actual size';};}
+  // ---- Change map: a viewport, not a picture
+  //
+  // The map has no useful single size. Fitted to its container it is unreadable -- measured on the
+  // 8-1 report, a 2510px-wide graph inside an 850px box is a 3x downscale, roughly 4px type. Shown
+  // at natural size it is a horizontal scrollbar with no overview. So the canvas is a fixed-height
+  // viewport and the SVG rides a transform: fit on open, then zoom about the pointer and drag to
+  // pan. Pointer Events carry mouse, pen and touch on one path, which is why pinch needs no
+  // separate touch handler.
+  function initMap() {
+    const box = $('#map-canvas'), stage = $('.map-stage'), svg = stage && stage.querySelector('svg');
+    if (!box || !stage || !svg) return;
+    // The viewBox is the graph's own coordinate space and survives whatever width mermaid puts on
+    // the element; the bounding rect is the fallback for an SVG rendered without one.
+    const vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+    const r0 = svg.getBoundingClientRect();
+    const natW = (vb.length === 4 && vb[2]) ? vb[2] : r0.width;
+    const natH = (vb.length === 4 && vb[3]) ? vb[3] : r0.height;
+    if (!natW || !natH) return;
+    svg.style.width = natW + 'px'; svg.style.height = natH + 'px';
+    let k = 1, tx = 0, ty = 0, fit = 1, fitted = false;
+    const pct = $('#map-pct');
+    // Centre the graph while it is smaller than the box, and stop it being dragged off-screen once
+    // it is larger. Without this a pan can lose the map entirely with no way back but Fit.
+    const clamp = () => {
+      const bw = box.clientWidth, bh = box.clientHeight, w = natW * k, h = natH * k;
+      tx = w <= bw ? (bw - w) / 2 : Math.min(0, Math.max(bw - w, tx));
+      ty = h <= bh ? (bh - h) / 2 : Math.min(0, Math.max(bh - h, ty));
+    };
+    const draw = () => {
+      stage.style.transform = 'translate(' + tx.toFixed(1) + 'px,' + ty.toFixed(1) + 'px) scale(' + k.toFixed(4) + ')';
+      if (pct) pct.textContent = Math.round(k * 100) + '%';
+    };
+    // The canvas height follows the graph instead of being a fixed slab. Most maps are wide and
+    // shallow -- this one is 2069x384 -- and a fixed 520px box left two thirds of it empty while
+    // the graph sat at 41%. A deep graph still gets a bounded viewport to pan inside.
+    const MIN_H = 220, MAX_H = 520;
+    let lastW = 0;
+    const fitNow = () => {
+      const bw = box.clientWidth;
+      if (!bw) return;   // inside a collapsed section: fit when it opens, not now
+      lastW = bw;
+      const s = Math.min(bw / natW, 1);
+      box.style.height = Math.round(Math.min(MAX_H, Math.max(MIN_H, natH * s + 12))) + 'px';
+      fit = Math.min(bw / natW, box.clientHeight / natH, 1);
+      k = fit; tx = 0; ty = 0; clamp(); draw(); fitted = true;
+    };
+    // Re-fit only when the WIDTH moved. fitNow writes the height, which re-triggers the observer;
+    // routing an unchanged width to clamp/draw is what keeps that from being a loop.
+    const onResize = () => {
+      const bw = box.clientWidth; if (!bw) return;
+      if (!fitted || bw !== lastW) fitNow(); else { clamp(); draw(); }
+    };
+    // Zoom about a point, so the graph does not slide out from under the cursor -- the difference
+    // between zooming and zooming then hunting for what you were looking at.
+    const zoomAt = (f, cx, cy) => {
+      const nk = Math.max(Math.min(fit, 1) * 0.5, Math.min(6, k * f));
+      if (Math.abs(nk - k) < 1e-6) return;
+      tx = cx - (cx - tx) * (nk / k); ty = cy - (cy - ty) * (nk / k); k = nk; clamp(); draw();
+    };
+    const atCentre = f => zoomAt(f, box.clientWidth / 2, box.clientHeight / 2);
+    box.addEventListener('wheel', e => {
+      e.preventDefault(); const r = box.getBoundingClientRect();
+      zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+    }, {passive: false});
+    box.addEventListener('dblclick', e => {
+      const r = box.getBoundingClientRect(); zoomAt(1.6, e.clientX - r.left, e.clientY - r.top);
+    });
+    const pts = new Map(); let last = null, pinch = 0;
+    const spread = () => { const p = [...pts.values()]; return p.length < 2 ? 0 : Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
+    const midPt  = () => { const p = [...pts.values()]; return {x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2}; };
+    box.addEventListener('pointerdown', e => {
+      box.setPointerCapture(e.pointerId); pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+      if (pts.size === 1) { last = {x: e.clientX, y: e.clientY}; box.classList.add('grabbing'); }
+      else if (pts.size === 2) { pinch = spread(); last = null; }
+    });
+    box.addEventListener('pointermove', e => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+      if (pts.size >= 2) {
+        const d = spread();
+        if (pinch && d) { const r = box.getBoundingClientRect(), c = midPt(); zoomAt(d / pinch, c.x - r.left, c.y - r.top); pinch = d; }
+        return;
+      }
+      if (last) { tx += e.clientX - last.x; ty += e.clientY - last.y; last = {x: e.clientX, y: e.clientY}; clamp(); draw(); }
+    });
+    // Lifting one finger of a pinch must re-seat the pan anchor on the finger still down, or the
+    // map jumps by the distance between the two.
+    const drop = e => {
+      pts.delete(e.pointerId); if (pts.size < 2) pinch = 0;
+      if (pts.size === 0) { last = null; box.classList.remove('grabbing'); }
+      else { const p = [...pts.values()][0]; last = {x: p.x, y: p.y}; }
+    };
+    box.addEventListener('pointerup', drop); box.addEventListener('pointercancel', drop);
+    box.addEventListener('keydown', e => {
+      const step = e.shiftKey ? 60 : 24;
+      if (e.key === '+' || e.key === '=') atCentre(1.25);
+      else if (e.key === '-' || e.key === '_') atCentre(1 / 1.25);
+      else if (e.key === '0') fitNow();
+      else if (e.key === 'ArrowLeft')  { tx += step; clamp(); draw(); }
+      else if (e.key === 'ArrowRight') { tx -= step; clamp(); draw(); }
+      else if (e.key === 'ArrowUp')    { ty += step; clamp(); draw(); }
+      else if (e.key === 'ArrowDown')  { ty -= step; clamp(); draw(); }
+      else return;
+      e.preventDefault();
+    });
+    const bi = $('#map-in'), bo = $('#map-out'), bf = $('#map-fit'), bl = $('#map-list');
+    if (bi) bi.onclick = () => atCentre(1.4);
+    if (bo) bo.onclick = () => atCentre(1 / 1.4);
+    if (bf) bf.onclick = fitNow;
+    // The map elides long file paths to keep the boxes apart; the list is where they stay in full.
+    if (bl) bl.onclick = () => {
+      const l = $('#map-fallback'); if (!l) return;
+      const hidden = l.classList.toggle('hidden');
+      bl.setAttribute('aria-expanded', String(!hidden));
+    };
+    if (window.ResizeObserver) new ResizeObserver(onResize).observe(box);
+    else addEventListener('resize', onResize);
+    fitNow();
+  }
+  // Called by the mermaid module below once it has run. The canvas ships `static` -- plain, auto
+  // height, no controls -- and this is the only thing that promotes it to a viewport. Nothing here
+  // runs when the CDN is unreachable, and that is the point: a page that never got its SVG keeps
+  // the behaviour it had before the canvas existed, with the text list still showing.
+  window.__dcMapReady = ok => {
+    const box = $('#map-canvas'); if (!box) return;
+    const svg = ok ? box.querySelector('svg') : null;
+    if (!svg) return;
+    box.classList.remove('static');
+    $('#map-fallback')?.classList.add('hidden');
+    const stage = document.createElement('div'); stage.className = 'map-stage';
+    stage.appendChild(svg); box.textContent = ''; box.appendChild(stage);
+    $('.map-tools')?.classList.remove('hidden');
+    initMap();
+  };
   // ---- Ask about a selection (comments)
   const askBtn = $('#ask-btn'), pop = $('#ask-pop'), askText = $('#ask-text');
   let sel = null;
@@ -805,7 +945,12 @@ __BODY__
   const m = document.querySelector('pre.mermaid');
   if (m) {
     const s = document.createElement('script'); s.type = 'module';
-    s.textContent = "import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',flowchart:{useMaxWidth:true,htmlLabels:true}});mermaid.run({querySelector:'pre.mermaid'}).then(()=>{document.getElementById('map-fallback')?.classList.add('hidden');const svg=document.querySelector('.map svg');const box=document.querySelector('.map');const nat=svg&&svg.style.maxWidth;if(svg&&nat){box.style.setProperty('--natural',nat);document.getElementById('map-zoom')?.classList.remove('hidden');}}).catch(()=>{});";
+    s.textContent = "import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';"
+      + "mermaid.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose',"
+      + "flowchart:{useMaxWidth:false,htmlLabels:true,nodeSpacing:40,rankSpacing:52,padding:12}});"
+      + "mermaid.run({querySelector:'pre.mermaid'})"
+      + ".then(()=>window.__dcMapReady&&window.__dcMapReady(true))"
+      + ".catch(()=>window.__dcMapReady&&window.__dcMapReady(false));";
     document.body.appendChild(s);
   }
 })();

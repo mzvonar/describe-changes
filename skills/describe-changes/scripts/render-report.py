@@ -24,6 +24,26 @@ EDGE_STYLE = {"calls": "-->", "dataflow": "==>", "imports": "-.->", "renders": "
 
 def mid(s): return "n" + hashlib.md5(s.encode()).hexdigest()[:8]
 
+def short_path(p, budget=40):
+    """A cluster title the box can actually hold.
+
+    Mermaid sizes a cluster box from its CONTENTS, never from its title, so a title wider than the
+    box overflows it and collides with whatever sits alongside. Measured on the 8-1 map before this
+    changed: ten clusters titled with full repo paths produced SEVEN overlapping pairs.
+
+    Keep the first segment and the last two, elide the middle. The last two are what disambiguate
+    `.../en/translation.json` from `.../fr/translation.json` -- a bare basename does not, and two
+    boxes titled `translation.json` are worse than one wide box.
+    """
+    p = p.replace('"', "")
+    if len(p) <= budget: return p
+    seg = [x for x in p.split("/") if x]
+    if len(seg) > 3:
+        cand = seg[0] + "/\u2026/" + "/".join(seg[-2:])
+        if len(cand) <= budget: return cand
+    cand = "\u2026/" + "/".join(seg[-2:])
+    return cand if len(cand) <= budget else "\u2026/" + seg[-1]
+
 def mermaid(graph):
     nodes, edges = graph.get("nodes", []), graph.get("edges", [])
     if not nodes: return ""
@@ -41,8 +61,10 @@ def mermaid(graph):
         else: shape = f'["{label}"]'
         return f'  {mid(n["id"])}{shape}'
     for f, ns in by_file.items():
-        if use_sub and f:
-            out.append(f'  subgraph {mid("f:"+f)}["{f.replace(chr(34), "")}"]')
+        # A subgraph is a GROUPING. A box drawn around a single node groups nothing, and it costs
+        # the map the full width of its title -- which is how ten one-node boxes collided above.
+        if use_sub and f and len(ns) > 1:
+            out.append(f'  subgraph {mid("f:"+f)}["{short_path(f)}"]')
             out += ["  " + node_line(n) for n in ns]
             out.append("  end")
         else:
@@ -806,7 +828,29 @@ def main():
     b.append('<section id="map"' + ('' if mm else ' class="hidden"') + '><h2>Map of the change</h2>'
              '<div class="legend"><span><i style="background:#1f5a3a"></i>added</span><span><i style="background:#6b4a12"></i>modified</span><span><i style="background:#6b1f1f"></i>removed</span><span><i style="background:#1f3f6b"></i>moved / renamed</span><span><i style="background:#3b2a6b"></i>split</span><span>→ calls · ⇒ data flows · ⇢ imports/moved</span></div>')
     if mm:
-        b.append(f'<div class="map"><pre class="mermaid">{E(mm)}</pre></div><div class="map-tools"><button class="btn hidden" id="map-zoom">Actual size</button></div><div class="map-list" id="map-fallback">{map_list(report["graph"])}</div>')
+        # The canvas is a VIEWPORT, not a picture: the SVG inside it is panned and zoomed by
+        # transform (template.html -> initMap). The toolbar ships hidden and the text list ships
+        # visible, so a report opened with no CDN keeps the list and never shows dead controls.
+        #
+        # It also ships `static`, and the viewport is granted only once an SVG actually exists.
+        # That is fail-SAFE rather than fail-detected: when the CDN is unreachable the mermaid
+        # module fails at `import`, so neither its .then nor its .catch ever runs and no callback
+        # can be trusted to undo a fixed-height clipping box. Measured with the CDN blocked: as an
+        # opt-out this clipped the raw graph source inside a 520px box; as an opt-in the page falls
+        # back to exactly its pre-canvas behaviour.
+        b.append(
+            '<div class="map static" id="map-canvas" tabindex="0"'
+            ' aria-label="Change map. Drag to pan, scroll or pinch to zoom, or press the List button for the same graph as text.">'
+            f'<pre class="mermaid">{E(mm)}</pre></div>'
+            '<div class="map-tools hidden">'
+            '<span class="map-hint">drag to pan \u00b7 scroll or pinch to zoom</span>'
+            '<span class="map-pct" id="map-pct" aria-live="polite">100%</span>'
+            '<button class="btn" id="map-out" aria-label="Zoom out">\u2212</button>'
+            '<button class="btn" id="map-in" aria-label="Zoom in">+</button>'
+            '<button class="btn" id="map-fit">Fit</button>'
+            '<button class="btn" id="map-list" aria-expanded="false">List</button>'
+            '</div>'
+            f'<div class="map-list" id="map-fallback">{map_list(report["graph"])}</div>')
         if report["graph"].get("narrative"): b.append(f'<div class="narr" style="margin-top:.6rem">{E(report["graph"]["narrative"])}</div>')
     else:
         b.append('<div class="empty">No structural map for this change.</div>')

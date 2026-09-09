@@ -1,6 +1,6 @@
 ---
 name: describe-changes
-version: "1.16.3"
+version: "1.17.0"
 description: >
   Present an implemented change to a human reviewer the way a human needs it: what was done and why,
   a visual map of the high-level change (who calls whom, where data flows, what moved/split/renamed),
@@ -189,6 +189,10 @@ the exact shape in `reference/report-schema.md`. The non-negotiables:
 - **Graph** = only change-relevant symbols (functions, components, types, modules, stores), ≤ ~25
   nodes, edges of kind `calls | dataflow | imports | renders | moved_to | split_into | extends | reads | writes`.
   Use `diff-model.json`'s `symbol_moves` and `moved_from` for `moved`/`split`/`renamed` nodes.
+  A `file` earns its own box only when **two or more** of its nodes are in the graph, and the box
+  title is elided to ~40 chars: mermaid sizes a cluster from its contents and not from its title, so
+  a one-node box bought nothing and paid a full repo path in width -- ten of them overlapped in seven
+  places. Do not lean on the box to carry a node's file; the `List` view holds the full paths.
 - **`how_to_check`:** one entry per capability this change actually SHIPPED, with the steps to drive
   it — the reviewer's way to stop trusting the report. Write steps someone who has never seen the
   feature can follow: where to start, what to click, what they should see (`expect`). Name real
@@ -225,7 +229,10 @@ Give the user the **LAN and Tailscale URLs** (phone-friendly) and the local path
 exactly as printed — each carries a `?k=…` token** minted for this run; the server binds 0.0.0.0 (a
 phone cannot reach a loopback bind) and refuses any request that has neither the token nor the cookie
 the first open sets. `--no-token` serves openly for a trusted setup, and says so in its banner. The
-page is self-contained except the mermaid renderer (CDN); the map's text fallback shows if offline.
+page is self-contained except the mermaid renderer (CDN). The map is a **canvas, not a picture** --
+drag to pan, scroll or pinch to zoom, `Fit` restores the overview, `List` shows the same graph as
+text with full paths. If the CDN never answers, the canvas stays plain and that text list is what
+the reader gets.
 If the `Artifact` tool is available and the user is remote, you may also publish `$OUT/index.html`
 (keep the same file path on re-publish). Skip all of this with `--chat-only`.
 
