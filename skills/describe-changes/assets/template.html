@@ -174,7 +174,11 @@ button.fpath:active{border-color:var(--info)}
 .ck-mark textarea{width:100%;font:inherit;font-size:.85rem;background:var(--bg2);color:var(--fg);border:1px solid var(--line2);border-radius:8px;padding:.5rem .7rem;min-height:44px;resize:vertical}
 .ck-mark textarea.has{border-color:var(--crit)}
 .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:.3rem;vertical-align:-2px}
-.map{position:relative;background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;height:clamp(240px,58vh,520px);touch-action:none;cursor:grab}
+/* user-select:none is DEFENSIVE, not a fix for an observed bug: a drag across the labels was
+   probed in Chromium and selected nothing, because setPointerCapture suppresses the selection
+   default there. That is an engine side-effect, not a guarantee, and the map is a drag surface
+   where selecting a label is never the intent -- so the property states it outright. */
+.map{position:relative;background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;height:clamp(240px,58vh,520px);touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
 .map:focus-visible{outline:2px solid var(--info);outline-offset:2px}
 .map.grabbing{cursor:grabbing}
 .map.static{height:auto;padding:.5rem;overflow:auto;cursor:default;touch-action:auto}
@@ -665,8 +669,9 @@ __BODY__
   //
   // The map has no useful single size. Fitted to its container it is unreadable -- measured on the
   // 8-1 report, a 2510px-wide graph inside an 850px box is a 3x downscale, roughly 4px type. Shown
-  // at natural size it is a horizontal scrollbar with no overview. So the canvas is a fixed-height
-  // viewport and the SVG rides a transform: fit on open, then zoom about the pointer and drag to
+  // at natural size it is a horizontal scrollbar with no overview. So the canvas is a BOUNDED
+  // viewport -- its height derived per graph by fitNow(), not fixed -- and the SVG rides a
+  // transform: fit on open, then zoom about the pointer and drag to
   // pan. Pointer Events carry mouse, pen and touch on one path, which is why pinch needs no
   // separate touch handler.
   function initMap() {
@@ -723,7 +728,14 @@ __BODY__
     const atCentre = f => zoomAt(f, box.clientWidth / 2, box.clientHeight / 2);
     box.addEventListener('wheel', e => {
       e.preventDefault(); const r = box.getBoundingClientRect();
-      zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+      // deltaY's UNIT is deltaMode's to decide: pixels in Chrome, LINES in Firefox behind a real
+      // mouse wheel (deltaY ~3 a notch), pages at the extreme. Calibrating on pixels alone made a
+      // Firefox notch worth 0.45% where Chrome's is 16% -- some 200 notches to double the zoom, so
+      // an interaction both the hint and the aria-label advertise read as broken there.
+      const px = e.deltaMode === 1 ? e.deltaY * 16
+               : e.deltaMode === 2 ? e.deltaY * box.clientHeight
+               : e.deltaY;
+      zoomAt(Math.exp(-px * 0.0015), e.clientX - r.left, e.clientY - r.top);
     }, {passive: false});
     box.addEventListener('dblclick', e => {
       const r = box.getBoundingClientRect(); zoomAt(1.6, e.clientX - r.left, e.clientY - r.top);

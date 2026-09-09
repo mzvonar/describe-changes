@@ -42,7 +42,15 @@ def short_path(p, budget=40):
         cand = seg[0] + "/\u2026/" + "/".join(seg[-2:])
         if len(cand) <= budget: return cand
     cand = "\u2026/" + "/".join(seg[-2:])
-    return cand if len(cand) <= budget else "\u2026/" + seg[-1]
+    if len(cand) <= budget: return cand
+    # Every path-shaped elision still overflows, so cut CHARACTERS. A long basename is the case no
+    # segment elision can reach: `.../InMemoryIdentityDocumentPartHistoryPort.kt` is 44 chars with
+    # nothing left to drop, and 82 tracked files in this repo have a basename over 38. Returning
+    # `"\u2026/" + seg[-1]` unconditionally gave up to 56 chars against a budget of 40 -- and for an
+    # input with no `/` at all it returned a string LONGER than the one it was handed, which is the
+    # exact fault this function exists to prevent.
+    tail = seg[-1] if seg else p
+    return "\u2026" + tail[-(budget - 1):]
 
 def mermaid(graph):
     nodes, edges = graph.get("nodes", []), graph.get("edges", [])
