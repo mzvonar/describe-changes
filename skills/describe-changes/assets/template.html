@@ -674,16 +674,18 @@ __BODY__
   // transform: fit on open, then zoom about the pointer and drag to
   // pan. Pointer Events carry mouse, pen and touch on one path, which is why pinch needs no
   // separate touch handler.
+  // Returns whether the canvas can actually be DRIVEN -- the caller commits the UI on that, not on
+  // the mere arrival of an SVG.
   function initMap() {
     const box = $('#map-canvas'), stage = $('.map-stage'), svg = stage && stage.querySelector('svg');
-    if (!box || !stage || !svg) return;
+    if (!box || !stage || !svg) return false;
     // The viewBox is the graph's own coordinate space and survives whatever width mermaid puts on
     // the element; the bounding rect is the fallback for an SVG rendered without one.
     const vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
     const r0 = svg.getBoundingClientRect();
     const natW = (vb.length === 4 && vb[2]) ? vb[2] : r0.width;
     const natH = (vb.length === 4 && vb[3]) ? vb[3] : r0.height;
-    if (!natW || !natH) return;
+    if (!natW || !natH) return false;
     svg.style.width = natW + 'px'; svg.style.height = natH + 'px';
     let k = 1, tx = 0, ty = 0, fit = 1, fitted = false;
     const pct = $('#map-pct');
@@ -761,7 +763,11 @@ __BODY__
     // Lifting one finger of a pinch must re-seat the pan anchor on the finger still down, or the
     // map jumps by the distance between the two.
     const drop = e => {
-      pts.delete(e.pointerId); if (pts.size < 2) pinch = 0;
+      pts.delete(e.pointerId);
+      // Re-baseline rather than carry the old spread across a re-pairing: with THREE pointers down,
+      // dropping one leaves spread() measuring a DIFFERENT pair, and the stale baseline would read
+      // as a one-frame zoom jump.
+      pinch = pts.size < 2 ? 0 : spread();
       if (pts.size === 0) { last = null; box.classList.remove('grabbing'); }
       else { const p = [...pts.values()][0]; last = {x: p.x, y: p.y}; }
     };
@@ -791,6 +797,7 @@ __BODY__
     if (window.ResizeObserver) new ResizeObserver(onResize).observe(box);
     else addEventListener('resize', onResize);
     fitNow();
+    return true;
   }
   // Called by the mermaid module below once it has run. The canvas ships `static` -- plain, auto
   // height, no controls -- and this is the only thing that promotes it to a viewport. Nothing here
@@ -800,12 +807,21 @@ __BODY__
     const box = $('#map-canvas'); if (!box) return;
     const svg = ok ? box.querySelector('svg') : null;
     if (!svg) return;
+    // Build the stage, then commit the UI only if initMap says the canvas is drivable. The property
+    // this design sells is not "an SVG arrived" but "the viewport works", and initMap can still bail
+    // on a degenerate render. Committing ahead of it would leave the reader the one state the whole
+    // fail-safe exists to prevent: a clipping box with a live-looking toolbar wired to nothing and
+    // no text list underneath.
+    const stage = document.createElement('div'); stage.className = 'map-stage';
+    stage.appendChild(svg);                  // the SVG is safe inside `stage` before the box is cleared
+    box.textContent = ''; box.appendChild(stage);
+    if (!initMap()) {                        // keep the diagram, drop the viewport
+      box.textContent = ''; box.appendChild(svg);
+      return;                                // `static` intact, list showing, toolbar still hidden
+    }
     box.classList.remove('static');
     $('#map-fallback')?.classList.add('hidden');
-    const stage = document.createElement('div'); stage.className = 'map-stage';
-    stage.appendChild(svg); box.textContent = ''; box.appendChild(stage);
     $('.map-tools')?.classList.remove('hidden');
-    initMap();
   };
   // ---- Ask about a selection (comments)
   const askBtn = $('#ask-btn'), pop = $('#ask-pop'), askText = $('#ask-text');
