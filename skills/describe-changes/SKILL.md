@@ -1,6 +1,6 @@
 ---
 name: describe-changes
-version: "1.17.2"
+version: "1.17.3"
 description: >
   Present an implemented change to a human reviewer the way a human needs it: what was done and why,
   a visual map of the high-level change (who calls whom, where data flows, what moved/split/renamed),

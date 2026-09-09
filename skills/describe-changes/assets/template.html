@@ -178,7 +178,7 @@ button.fpath:active{border-color:var(--info)}
    probed in Chromium and selected nothing, because setPointerCapture suppresses the selection
    default there. That is an engine side-effect, not a guarantee, and the map is a drag surface
    where selecting a label is never the intent -- so the property states it outright. */
-.map{position:relative;background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;height:clamp(240px,58vh,520px);touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
+.map{position:relative;background:#0b0e14;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;height:clamp(220px,58vh,520px);touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
 .map:focus-visible{outline:2px solid var(--info);outline-offset:2px}
 .map.grabbing{cursor:grabbing}
 .map.static{height:auto;padding:.5rem;overflow:auto;cursor:default;touch-action:auto}
@@ -703,11 +703,14 @@ __BODY__
     // The canvas height follows the graph instead of being a fixed slab. Most maps are wide and
     // shallow -- this one is 2069x384 -- and a fixed 520px box left two thirds of it empty while
     // the graph sat at 41%. A deep graph still gets a bounded viewport to pan inside.
-    const MIN_H = 220, MAX_H = 520;
+    const MIN_H = 220, MAX_H = 520;   // keep in step with the clamp() floor/ceiling on .map
     let lastW = 0;
     const fitNow = () => {
       const bw = box.clientWidth;
-      if (!bw) return;   // inside a collapsed section: fit when it opens, not now
+      // Zero width means the box is not laid out yet; the ResizeObserver below delivers the fit
+      // when it is. NOT "a collapsed section" -- the map's <h2> carries no `sec-t`, so it is not
+      // one of the collapsible sections, and naming that as the reason would be inventing a cause.
+      if (!bw) return;
       lastW = bw;
       const s = Math.min(bw / natW, 1);
       box.style.height = Math.round(Math.min(MAX_H, Math.max(MIN_H, natH * s + 12))) + 'px';
@@ -809,9 +812,17 @@ __BODY__
     if (!svg) return;
     // Build the stage, then commit the UI only if initMap says the canvas is drivable. The property
     // this design sells is not "an SVG arrived" but "the viewport works", and initMap can still bail
-    // on a degenerate render. Committing ahead of it would leave the reader the one state the whole
+    // on a degenerate render. Committing ahead of it left the reader the one state the whole
     // fail-safe exists to prevent: a clipping box with a live-looking toolbar wired to nothing and
     // no text list underneath.
+    //
+    // Reachability, stated so the next reader does not have to re-derive it: with mermaid 11 this
+    // bail is UNREACHABLE today. It needs both legs of the size derivation to fail at once -- no
+    // usable viewBox AND a zero getBoundingClientRect -- and the rect is zero only for an unrendered
+    // box, which is the very case the viewBox leg covers. Nothing here can emit an empty graph
+    // either: mermaid() returns "" for no nodes and `if mm:` gates the block. The rollback is kept
+    // as the shape for the day that derivation changes, not as a fix for an observed state; the
+    // before/after was demonstrated by blanking the SVG inside a wrapped __dcMapReady.
     const stage = document.createElement('div'); stage.className = 'map-stage';
     stage.appendChild(svg);                  // the SVG is safe inside `stage` before the box is cleared
     box.textContent = ''; box.appendChild(stage);
