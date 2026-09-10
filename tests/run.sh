@@ -669,9 +669,20 @@ python3 "$S/feedback.py" digest | grep -q 'improvement: name the persistence' ||
 grep -q 'class="ln" role="button"' "$OUT/index.html" || fail "diff lines have no comment gutter"
 # The sheet must own its scroll. Reported from a phone: a diff SHORTER than the sheet has no inner
 # scroll, so the drag chained to the document and the report slid about behind a sheet that looked
-# frozen. Two halves, and both must hold — the containment AND the page lock. The third assertion is
-# the one that actually ratchets: a future opener that sets `.show` itself would skip `lockPage()`
-# and silently reintroduce this, which is invisible to the other two.
+# frozen. Two halves, and both must hold — the containment AND the page lock. The `showSheet()`
+# assertion is the one that actually ratchets: a future opener that sets `.show` itself would skip
+# `lockPage()` and silently reintroduce this, which is invisible to the other two.
+#
+# CORRECTED EXPECTATION, and the correction is the point. This block used to require
+# `overscroll-behavior:contain` on `.diff` unqualified, which is how the phone defect above was
+# fixed. It over-fixed: containing the Y axis on a diff forbids the one chain that MUST happen,
+# diff -> `.sheet-b`, which is the element that actually scrolls. Combined with `overflow-x:auto`
+# leaving `overflow-y` to compute to `auto` — CSS coerces a `visible` axis when the other is not
+# `visible`, so the diff became a vertical scroller with zero vertical overflow, permanently at both
+# edges — every vertical wheel over a diff was swallowed. Measured on the shipped report: the sheet
+# refused to scroll at 7 of 8 desktop viewport sizes. The phone case is still covered, one level up:
+# `.sheet-b` carries `overscroll-behavior:contain`, so the gesture stops at the sheet either way.
+# So: contain the X axis on a diff, never the Y, and state `overflow-y` rather than inherit it.
 python3 - "$OUT" <<'PY' || fail "the file sheet does not own its scroll (background would scroll instead)"
 import re, sys
 h = open(sys.argv[1] + "/index.html", encoding="utf-8").read()
@@ -679,7 +690,14 @@ sb = re.search(r'\.sheet-b\{([^}]*)\}', h)
 assert sb, "no .sheet-b rule"
 assert "overscroll-behavior:contain" in sb.group(1), "sheet body does not contain its overscroll"
 assert "min-height:0" in sb.group(1), "sheet body cannot shrink below its content in the flex column"
-assert re.search(r'\.diff\{[^}]*overscroll-behavior:contain', h), "diffs do not contain their overscroll"
+d = re.search(r'\.diff\{([^}]*)\}', h)
+assert d, "no .diff rule"
+assert "overscroll-behavior-x:contain" in d.group(1), "diffs do not contain their SIDEWAYS overscroll"
+assert not re.search(r'overscroll-behavior:\s*contain', d.group(1)), \
+    "a diff contains overscroll on BOTH axes, so a vertical wheel over it can never reach .sheet-b"
+assert "overflow-y:hidden" in d.group(1), \
+    "a diff must state overflow-y; overflow-x:auto alone computes overflow-y to auto, making it a \
+vertical scroller with zero vertical overflow"
 assert "lockPage()" in h and "unlockPage()" in h, "the page behind the sheet is never locked"
 # Every place that shows the sheet goes through showSheet(), which is what carries the lock.
 bare = [m for m in re.findall(r'\n[^\n]*sheet\.classList\.add\([\'"]show[\'"]\)[^\n]*', h)
